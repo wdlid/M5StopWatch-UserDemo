@@ -157,6 +157,7 @@ jobs:
 
       - name: Prepare ESP-IDF artifacts
         run: |
+          . $IDF_PATH/export.sh
           mkdir -p dist-idf
           cp build/StopWatch-UserDemo.bin dist-idf/firmware-ota.bin
           cp build/bootloader/bootloader.bin dist-idf/bootloader.bin
