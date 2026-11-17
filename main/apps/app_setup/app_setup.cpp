@@ -65,6 +65,11 @@ void AppSetup::onOpen()
                      _destroy_menu = true;
                      _worker       = std::make_unique<ButtonWorker>();
                  }},
+                {"Eye Care",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<EyeCareWorker>();
+                 }},
                 {"Wi-Fi",
                  [&]() {
                      _destroy_menu = true;

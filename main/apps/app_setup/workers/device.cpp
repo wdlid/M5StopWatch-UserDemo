@@ -229,6 +229,130 @@ private:
     bool _save_requested = false;
 };
 
+class EyeCareWorker::EyeCareView {
+public:
+    explicit EyeCareView(bool initialEnabled) : _current_enabled(initialEnabled)
+    {
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _title_label = std::make_unique<Label>(_panel->get());
+        _title_label->align(LV_ALIGN_TOP_MID, 0, 48);
+        _title_label->setTextFont(&MontserratSemiBold26);
+        _title_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _title_label->setText("Eye Care");
+
+        createSwitchRow(95, "10m Reminder", _current_enabled,
+                        [this](bool enabled) { _current_enabled = enabled; });
+
+        createTestButtonRow(200, "Test Tone", [this]() {
+            GetHAL().playEyeCareDing();
+        });
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    bool currentEnabled() const
+    {
+        return _current_enabled;
+    }
+
+    bool consumeSaveRequested()
+    {
+        bool requested  = _save_requested;
+        _save_requested = false;
+        return requested;
+    }
+
+private:
+    void createSwitchRow(int y, const char* title, bool initialValue, const std::function<void(bool)>& onChanged)
+    {
+        auto row = std::make_unique<Container>(_panel->get());
+        row->setSize(374, 95);
+        row->align(LV_ALIGN_TOP_MID, 0, y);
+        row->setBgColor(lv_color_hex(0x343434));
+        row->setBorderWidth(0);
+        row->setShadowWidth(0);
+        row->setRadius(48);
+        row->setPaddingAll(0);
+        row->setBgOpa(LV_OPA_COVER);
+
+        auto label = std::make_unique<Label>(row->get());
+        label->setText(title);
+        label->setTextFont(&lv_font_montserrat_24);
+        label->setTextColor(lv_color_hex(0xFFFFFF));
+        label->align(LV_ALIGN_LEFT_MID, 32, 0);
+
+        auto switch_widget = std::make_unique<Switch>(row->get());
+        switch_widget->setSize(80, 44);
+        switch_widget->align(LV_ALIGN_RIGHT_MID, -32, 0);
+        switch_widget->setValue(initialValue);
+        switch_widget->setBgColor(lv_color_hex(0x222222), LV_PART_MAIN);
+        switch_widget->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
+        switch_widget->setBorderWidth(0, LV_PART_MAIN);
+        switch_widget->setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(switch_widget->get(), lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(switch_widget->get(), LV_OPA_COVER, LV_PART_KNOB);
+        lv_obj_set_style_border_width(switch_widget->get(), 0, LV_PART_KNOB);
+        lv_obj_set_style_radius(switch_widget->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
+        switch_widget->setBgColor(lv_color_hex(0x53BD65), LV_PART_INDICATOR | LV_STATE_CHECKED);
+        switch_widget->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        switch_widget->setBorderWidth(0, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        switch_widget->onValueChanged().connect(onChanged);
+
+        _labels.push_back(std::move(label));
+        _switches.push_back(std::move(switch_widget));
+        _rows.push_back(std::move(row));
+    }
+
+    void createTestButtonRow(int y, const char* title, const std::function<void()>& onClicked)
+    {
+        auto btn = std::make_unique<Button>(_panel->get());
+        btn->setSize(374, 95);
+        btn->align(LV_ALIGN_TOP_MID, 0, y);
+        btn->setBgColor(lv_color_hex(0x343434));
+        btn->setBorderWidth(0);
+        btn->setShadowWidth(0);
+        btn->setRadius(48);
+        btn->label().setText(title);
+        btn->label().setTextFont(&lv_font_montserrat_24);
+        btn->label().setTextColor(lv_color_hex(0x4AD78C));
+        btn->label().align(LV_ALIGN_CENTER, 0, 0);
+        if (onClicked) {
+            btn->onClick().connect(onClicked);
+        }
+        _buttons.push_back(std::move(btn));
+    }
+
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Label> _title_label;
+    std::vector<std::unique_ptr<Container>> _rows;
+    std::vector<std::unique_ptr<Label>> _labels;
+    std::vector<std::unique_ptr<Switch>> _switches;
+    std::vector<std::unique_ptr<Button>> _buttons;
+    std::unique_ptr<Button> _ok_button;
+    bool _current_enabled = false;
+    bool _save_requested  = false;
+};
+
 class WifiWorker::WifiConfigView {
 public:
     explicit WifiConfigView(const Hal::WifiStatus& initialStatus)
@@ -700,6 +824,36 @@ void ButtonWorker::update()
 
 ButtonWorker::~ButtonWorker()
 {
+}
+
+EyeCareWorker::EyeCareWorker()
+{
+    mclog::tagInfo(_tag, "start eye care worker");
+
+    _applied_enabled = GetHAL().getEyeCareReminder();
+    _initial_enabled = _applied_enabled;
+    _view            = std::make_unique<EyeCareView>(_applied_enabled);
+}
+
+void EyeCareWorker::update()
+{
+    if (_view && _applied_enabled != _view->currentEnabled()) {
+        GetHAL().setEyeCareReminder(_view->currentEnabled(), false);
+        _applied_enabled = _view->currentEnabled();
+    }
+
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setEyeCareReminder(_view->currentEnabled(), true);
+        _saved   = true;
+        _is_done = true;
+    }
+}
+
+EyeCareWorker::~EyeCareWorker()
+{
+    if (!_saved) {
+        GetHAL().setEyeCareReminder(_initial_enabled, false);
+    }
 }
 
 WifiWorker::WifiWorker()

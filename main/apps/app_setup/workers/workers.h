@@ -123,6 +123,25 @@ private:
  * @brief
  *
  */
+class EyeCareWorker : public WorkerBase {
+public:
+    EyeCareWorker();
+    ~EyeCareWorker();
+    void update() override;
+
+private:
+    class EyeCareView;
+
+    std::unique_ptr<EyeCareView> _view;
+    bool _applied_enabled = false;
+    bool _initial_enabled = false;
+    bool _saved           = false;
+};
+
+/**
+ * @brief
+ *
+ */
 class WifiWorker : public WorkerBase {
 public:
     WifiWorker();

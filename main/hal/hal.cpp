@@ -45,6 +45,7 @@ void Hal::init()
     button_init();
     fs_init();
     wifi_init();
+    getEyeCareReminder(true);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -70,6 +71,7 @@ void Hal::feedTheDog()
 {
     wifi_tick();
     display_tick();
+    eye_care_tick();
     vTaskDelay(1);
 }
 

@@ -206,6 +206,7 @@ public:
     int getAudioSampleRate();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
+    bool isAudioPlaying();
 
     struct AudioSpectrumFrame {
         static constexpr std::size_t bandCount = 20;
@@ -337,6 +338,12 @@ public:
     void stopOta();
     bool isOtaRunning();
     OtaStatus getOtaStatus();
+
+    /* -------------------------------- Eye Care -------------------------------- */
+    void setEyeCareReminder(bool enabled, bool saveToSettings = true);
+    bool getEyeCareReminder(bool loadFromSettings = false);
+    void eye_care_tick();
+    void playEyeCareDing();
 
 private:
     static constexpr std::string_view SettingsNs = "system";

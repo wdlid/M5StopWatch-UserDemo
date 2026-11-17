@@ -117,6 +117,12 @@ public:
         esp_codec_dev_set_in_gain(_codec_dev, gain);
     }
 
+    bool isPlaying()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _is_playing;
+    }
+
     void play(std::vector<int16_t>& data, bool async)
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -484,6 +490,11 @@ void Hal::audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gai
 void Hal::audioPlay(std::vector<int16_t>& data, bool async)
 {
     _audio_codec.play(data, async);
+}
+
+bool Hal::isAudioPlaying()
+{
+    return _audio_codec.isPlaying();
 }
 
 int Hal::getAudioSampleRate()
