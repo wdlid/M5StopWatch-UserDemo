@@ -45,6 +45,11 @@ void AppSetup::onOpen()
                      _destroy_menu = true;
                      _worker       = std::make_unique<BrightnessWorker>();
                  }},
+                {"Screen Timeout",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<ScreenTimeoutWorker>();
+                 }},
                 {"Volume",
                  [&]() {
                      _destroy_menu = true;
@@ -74,6 +79,11 @@ void AppSetup::onOpen()
                  [&]() {
                      _destroy_menu = true;
                      _worker       = std::make_unique<SetDateWorker>();
+                 }},
+                {"Time Zone",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<TimezoneWorker>();
                  }},
             },
         },
@@ -119,6 +129,7 @@ void AppSetup::onRunning()
     if (_destroy_menu) {
         _menu_page.reset();
         _destroy_menu = false;
+        return;
     }
 
     if (_worker) {

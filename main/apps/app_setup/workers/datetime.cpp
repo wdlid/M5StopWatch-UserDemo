@@ -374,3 +374,118 @@ void SetDateWorker::update()
 SetDateWorker::~SetDateWorker()
 {
 }
+
+class TimezoneWorker::TimezoneView {
+public:
+    explicit TimezoneView(const std::string& initialTz)
+    {
+        _selected_tz = initialTz;
+
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _title_label = std::make_unique<Label>(_panel->get());
+        _title_label->align(LV_ALIGN_TOP_MID, 0, 54);
+        _title_label->setTextFont(&MontserratSemiBold26);
+        _title_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _title_label->setText("Time Zone");
+
+        _roller = std::make_unique<Roller>(_panel->get());
+        _roller->align(LV_ALIGN_CENTER, 0, -8);
+        _roller->setSize(340, 200);
+        _roller->setOptions(
+            "UTC+8 (Beijing/HK)\nUTC+9 (Tokyo/Seoul)\nUTC+0 (London/GMT)\nUTC+1 (Berlin/Paris)\nUTC-5 (New "
+            "York)\nUTC-8 (Los Angeles)",
+            LV_ROLLER_MODE_INFINITE);
+        _roller->setVisibleRowCount(5);
+        apply_selector_style(*_roller);
+
+        uint32_t sel_idx = 0;
+        if (initialTz == "CST-8") {
+            sel_idx = 0;
+        } else if (initialTz == "JST-9") {
+            sel_idx = 1;
+        } else if (initialTz == "GMT0") {
+            sel_idx = 2;
+        } else if (initialTz.find("CET") != std::string::npos) {
+            sel_idx = 3;
+        } else if (initialTz.find("EST") != std::string::npos) {
+            sel_idx = 4;
+        } else if (initialTz.find("PST") != std::string::npos) {
+            sel_idx = 5;
+        }
+
+        _roller->setSelected(sel_idx, LV_ANIM_OFF);
+        _roller->onValueChanged().connect([this](uint32_t index) {
+            static const char* tz_values[] = {
+                "CST-8",
+                "JST-9",
+                "GMT0",
+                "CET-1CEST,M3.5.0,M10.5.0/3",
+                "EST5EDT,M3.2.0,M11.1.0",
+                "PST8PDT,M3.2.0,M11.1.0"};
+            if (index < 6) {
+                _selected_tz = tz_values[index];
+            }
+        });
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    std::string selectedTz() const
+    {
+        return _selected_tz;
+    }
+
+    bool consumeSaveRequested()
+    {
+        bool req        = _save_requested;
+        _save_requested = false;
+        return req;
+    }
+
+private:
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Label> _title_label;
+    std::unique_ptr<Roller> _roller;
+    std::unique_ptr<Button> _ok_button;
+    std::string _selected_tz = "CST-8";
+    bool _save_requested     = false;
+};
+
+TimezoneWorker::TimezoneWorker()
+{
+    mclog::tagInfo(_tag, "start timezone worker");
+    _applied_tz = GetHAL().getTimezone();
+    _view       = std::make_unique<TimezoneView>(_applied_tz);
+}
+
+void TimezoneWorker::update()
+{
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setTimezone(_view->selectedTz());
+        _is_done = true;
+    }
+}
+
+TimezoneWorker::~TimezoneWorker()
+{
+}

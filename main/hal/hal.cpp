@@ -69,6 +69,7 @@ std::uint32_t Hal::millis()
 void Hal::feedTheDog()
 {
     wifi_tick();
+    display_tick();
     vTaskDelay(1);
 }
 

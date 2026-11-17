@@ -118,23 +118,37 @@ public:
 
     bool run()
     {
-        if (!ensure_wifi_stack_ready()) {
-            log("Wi-Fi initialization failed");
-            return false;
-        }
-
         _event_group = xEventGroupCreate();
         if (_event_group == nullptr) {
             log("Failed to create sync event group");
             return false;
         }
 
-        if (!start_access_point() || !start_web_server()) {
+        auto wifiStatus = GetHAL().getWifiStatus();
+        if (wifiStatus.connected && !wifiStatus.ipAddress.empty()) {
+            _ssid       = wifiStatus.ssid;
+            _page_url   = "http://" + wifiStatus.ipAddress;
+            _started_ap = false;
+            log("Wi-Fi: " + _ssid + "\nOpen page:\n" + _page_url);
+        } else {
+            if (!ensure_wifi_stack_ready()) {
+                log("Wi-Fi initialization failed");
+                return false;
+            }
+
+            if (!start_access_point()) {
+                stop();
+                return false;
+            }
+            _started_ap = true;
+            _page_url   = "http://192.168.4.1";
+            log("Connect to Wi-Fi: " + _ssid + "\nAnd open page:\n" + _page_url);
+        }
+
+        if (!start_web_server()) {
             stop();
             return false;
         }
-
-        log("Connect to Wi-Fi: " + _ssid + "\nAnd open page:\n" + std::string(_ap_url));
 
         input::KeyManager key_manager;
         while (true) {
@@ -174,7 +188,10 @@ private:
     bool start_access_point()
     {
         if (_ap_netif == nullptr) {
-            _ap_netif = esp_netif_create_default_wifi_ap();
+            _ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+            if (_ap_netif == nullptr) {
+                _ap_netif = esp_netif_create_default_wifi_ap();
+            }
         }
         if (_ap_netif == nullptr) {
             log("Failed to create AP network interface");
@@ -351,19 +368,22 @@ private:
             _server = nullptr;
         }
 
-        if (_dns_server) {
-            _dns_server->Stop();
-            _dns_server.reset();
-        }
+        if (_started_ap) {
+            if (_dns_server) {
+                _dns_server->Stop();
+                _dns_server.reset();
+            }
 
-        esp_err_t ret = esp_wifi_stop();
-        if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED && ret != ESP_ERR_WIFI_MODE) {
-            ESP_LOGW(_tag, "wifi stop failed: %s", esp_err_to_name(ret));
-        }
+            esp_err_t ret = esp_wifi_stop();
+            if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STARTED && ret != ESP_ERR_WIFI_MODE) {
+                ESP_LOGW(_tag, "wifi stop failed: %s", esp_err_to_name(ret));
+            }
 
-        if (_ap_netif != nullptr) {
-            esp_netif_destroy_default_wifi(_ap_netif);
-            _ap_netif = nullptr;
+            if (_ap_netif != nullptr) {
+                esp_netif_destroy_default_wifi(_ap_netif);
+                _ap_netif = nullptr;
+            }
+            _started_ap = false;
         }
 
         if (_event_group != nullptr) {
@@ -399,11 +419,11 @@ private:
         httpd_resp_send(req, body.c_str(), body.size());
     }
 
-    static std::string make_state_json(const BadgeState& state, std::string_view apSsid)
+    static std::string make_state_json(const BadgeState& state, std::string_view apSsid, std::string_view pageUrl)
     {
         std::string json = "{";
         json += "\"apSsid\":\"" + std::string(apSsid) + "\",";
-        json += "\"apUrl\":\"" + std::string(_ap_url) + "\",";
+        json += "\"apUrl\":\"" + std::string(pageUrl) + "\",";
         json += "\"slotCount\":" + std::to_string(state.slotCount) + ",";
         json += "\"activeSlot\":" + std::to_string(state.activeSlot) + ",";
         json += "\"carouselInterval\":" + std::to_string(state.carouselIntervalSec) + ",";
@@ -444,7 +464,7 @@ private:
             return ESP_FAIL;
         }
 
-        send_json(req, make_state_json(self->_callbacks.onGetState(), self->_ssid));
+        send_json(req, make_state_json(self->_callbacks.onGetState(), self->_ssid, self->_page_url));
         return ESP_OK;
     }
 
@@ -565,7 +585,7 @@ private:
     static esp_err_t handle_captive_portal(httpd_req_t* req)
     {
         auto* self      = self_from_request(req);
-        std::string url = std::string(_ap_url) + "/?_=" + std::to_string(esp_timer_get_time());
+        std::string url = (self != nullptr ? self->_page_url : std::string(_ap_url)) + "/?_=" + std::to_string(esp_timer_get_time());
         if (self != nullptr) {
             self->log("Received captive portal probe, redirecting to upload page");
         }
@@ -650,6 +670,8 @@ private:
     std::function<void(std::string_view)> _on_log;
     Callbacks _callbacks;
     std::string _ssid;
+    std::string _page_url           = _ap_url;
+    bool _started_ap                = false;
     std::unique_ptr<DnsServer> _dns_server;
     esp_netif_t* _ap_netif = nullptr;
     bool _exit_to_home     = false;

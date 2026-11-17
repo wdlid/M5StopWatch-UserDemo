@@ -410,6 +410,126 @@ BrightnessWorker::~BrightnessWorker()
 {
 }
 
+class ScreenTimeoutWorker::ScreenTimeoutView {
+public:
+    explicit ScreenTimeoutView(uint32_t initialTimeout)
+    {
+        _selected_timeout = initialTimeout;
+
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _title_label = std::make_unique<Label>(_panel->get());
+        _title_label->align(LV_ALIGN_TOP_MID, 0, 54);
+        _title_label->setTextFont(&MontserratSemiBold26);
+        _title_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _title_label->setText("Screen Timeout");
+
+        _roller = std::make_unique<Roller>(_panel->get());
+        _roller->align(LV_ALIGN_CENTER, 0, -8);
+        _roller->setSize(260, 200);
+        _roller->setOptions("15s\n30s\n1 min\n2 min\n5 min\nNever", LV_ROLLER_MODE_INFINITE);
+        _roller->setVisibleRowCount(5);
+
+        lv_obj_set_style_radius(_roller->get(), 52, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_roller->get(), lv_color_hex(0x343434), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(_roller->get(), LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(_roller->get(), 0, LV_PART_MAIN);
+        lv_obj_set_style_text_font(_roller->get(), &lv_font_montserrat_28, LV_PART_MAIN);
+        lv_obj_set_style_text_color(_roller->get(), lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+        lv_obj_set_style_text_align(_roller->get(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(_roller->get(), 24, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_roller->get(), lv_color_hex(0x4AD78C), LV_PART_SELECTED);
+        lv_obj_set_style_bg_opa(_roller->get(), LV_OPA_COVER, LV_PART_SELECTED);
+        lv_obj_set_style_text_font(_roller->get(), &lv_font_montserrat_28, LV_PART_SELECTED);
+        lv_obj_set_style_text_color(_roller->get(), lv_color_hex(0x0F5831), LV_PART_SELECTED);
+        lv_obj_set_style_text_align(_roller->get(), LV_TEXT_ALIGN_CENTER, LV_PART_SELECTED);
+        lv_obj_set_style_border_width(_roller->get(), 0, LV_PART_SELECTED);
+
+        uint32_t sel_idx = 1;
+        if (initialTimeout == 15) {
+            sel_idx = 0;
+        } else if (initialTimeout == 30) {
+            sel_idx = 1;
+        } else if (initialTimeout == 60) {
+            sel_idx = 2;
+        } else if (initialTimeout == 120) {
+            sel_idx = 3;
+        } else if (initialTimeout == 300) {
+            sel_idx = 4;
+        } else if (initialTimeout == 0) {
+            sel_idx = 5;
+        }
+
+        _roller->setSelected(sel_idx, LV_ANIM_OFF);
+        _roller->onValueChanged().connect([this](uint32_t index) {
+            static const uint32_t timeouts[] = {15, 30, 60, 120, 300, 0};
+            if (index < 6) {
+                _selected_timeout = timeouts[index];
+            }
+        });
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    uint32_t selectedTimeout() const
+    {
+        return _selected_timeout;
+    }
+
+    bool consumeSaveRequested()
+    {
+        bool req        = _save_requested;
+        _save_requested = false;
+        return req;
+    }
+
+private:
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Label> _title_label;
+    std::unique_ptr<Roller> _roller;
+    std::unique_ptr<Button> _ok_button;
+    uint32_t _selected_timeout = 30;
+    bool _save_requested       = false;
+};
+
+ScreenTimeoutWorker::ScreenTimeoutWorker()
+{
+    mclog::tagInfo(_tag, "start screen timeout worker");
+    _applied_timeout = GetHAL().getScreenTimeout();
+    _view            = std::make_unique<ScreenTimeoutView>(_applied_timeout);
+}
+
+void ScreenTimeoutWorker::update()
+{
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setScreenTimeout(_view->selectedTimeout(), true);
+        _is_done = true;
+    }
+}
+
+ScreenTimeoutWorker::~ScreenTimeoutWorker()
+{
+}
+
 VolumeWorker::VolumeWorker()
 {
     mclog::tagInfo(_tag, "start volume worker");

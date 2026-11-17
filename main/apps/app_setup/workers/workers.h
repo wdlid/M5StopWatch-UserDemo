@@ -56,6 +56,22 @@ private:
  * @brief
  *
  */
+class ScreenTimeoutWorker : public WorkerBase {
+public:
+    ScreenTimeoutWorker();
+    ~ScreenTimeoutWorker();
+    void update() override;
+
+private:
+    class ScreenTimeoutView;
+    std::unique_ptr<ScreenTimeoutView> _view;
+    uint32_t _applied_timeout = 30;
+};
+
+/**
+ * @brief
+ *
+ */
 class VolumeWorker : public WorkerBase {
 public:
     VolumeWorker();
@@ -134,6 +150,23 @@ private:
 
     std::unique_ptr<DateAdjustView> _view;
     DateYmd _applied_date;
+};
+
+/**
+ * @brief
+ *
+ */
+class TimezoneWorker : public WorkerBase {
+public:
+    TimezoneWorker();
+    ~TimezoneWorker();
+    void update() override;
+
+private:
+    class TimezoneView;
+
+    std::unique_ptr<TimezoneView> _view;
+    std::string _applied_tz;
 };
 
 /**

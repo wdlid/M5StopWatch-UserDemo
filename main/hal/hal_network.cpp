@@ -345,6 +345,7 @@ private:
                 _status.ssid            = data.empty() ? wifi.GetSsid() : data;
                 _status.ipAddress       = wifi.GetIpAddress();
                 _status.message         = "Connected";
+                GetHAL().sntp_sync();
             }
             break;
         case WifiEvent::Disconnected:

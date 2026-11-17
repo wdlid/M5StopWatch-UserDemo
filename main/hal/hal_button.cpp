@@ -39,6 +39,13 @@ void Hal::updateButtonStates()
     // btnPwr.setRawState(millis(), pmic_get_pwr_btn_state());
 
     auto& config = getButtonConfig();
+    if (btnA.wasPressed() || btnB.wasPressed()) {
+        if (isScreenSleeping()) {
+            wakeScreen();
+        } else {
+            resetActivityTimer();
+        }
+    }
     if (btnA.wasPressed()) {
         if (config.sfxEnabled) {
             audio::play_tone_from_midi(62 + 32, 0.02);

@@ -99,7 +99,12 @@ public:
         _btn->label().setTextFont(&lv_font_montserrat_24);
         _btn->label().setTextColor(lv_color_hex(0xF8FAFC));
         _btn->label().align(LV_ALIGN_CENTER, 0, 0);
-        _btn->onClick().connect([this]() { _exit_requested = true; });
+        _created_at = GetHAL().millis();
+        _btn->onClick().connect([this]() {
+            if (GetHAL().millis() - _created_at >= 800) {
+                _exit_requested = true;
+            }
+        });
     }
 
     void updateStatus(const Hal::OtaStatus& status)
@@ -147,9 +152,15 @@ public:
         }
     }
 
-    bool exitRequested() const
+    bool consumeExitRequested()
     {
-        return _exit_requested;
+        if (GetHAL().millis() - _created_at < 800) {
+            _exit_requested = false;
+            return false;
+        }
+        bool requested = _exit_requested;
+        _exit_requested = false;
+        return requested;
     }
 
     void setButtonVisible(bool visible)
@@ -170,6 +181,7 @@ private:
     std::unique_ptr<Label> _status_label;
     lv_obj_t* _bar_obj = nullptr;
     std::unique_ptr<Button> _btn;
+    uint32_t _created_at = 0;
     bool _exit_requested = false;
 };
 
@@ -202,7 +214,7 @@ void OtaWorker::update()
 
     // Can only exit if not currently flashing
     if (status.state != Hal::OtaState::Flashing) {
-        if (_view->exitRequested()) {
+        if (_view->consumeExitRequested()) {
             _is_done = true;
         }
     }

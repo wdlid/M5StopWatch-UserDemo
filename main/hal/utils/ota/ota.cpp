@@ -210,7 +210,10 @@ bool OtaManager::start_access_point()
 {
     GetHAL().wifi_enter_badge_ap();
 
-    esp_netif_t* ap_netif = esp_netif_create_default_wifi_ap();
+    esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!ap_netif) {
+        ap_netif = esp_netif_create_default_wifi_ap();
+    }
     if (!ap_netif) {
         log("Failed to create AP netif");
         return false;

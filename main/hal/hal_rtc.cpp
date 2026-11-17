@@ -7,6 +7,7 @@
 #include "utils/settings/settings.h"
 #include "drivers/rx8130/rx8130.h"
 #include <mooncake_log.h>
+#include <esp_sntp.h>
 #include <memory>
 #include <sys/time.h>
 #include <ctime>
@@ -114,6 +115,33 @@ void Hal::syncSystemTimeToRtc()
                    tm_curr.tm_sec);
 }
 
+void Hal::sntp_init()
+{
+    if (esp_sntp_enabled()) {
+        return;
+    }
+    mclog::tagInfo(_tag, "init sntp");
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_setservername(1, "ntp.aliyun.com");
+    esp_sntp_setservername(2, "time.asia.apple.com");
+    sntp_set_time_sync_notification_cb([](struct timeval* tv) {
+        mclog::tagInfo("HAL-RTC", "time synchronized from NTP server");
+        GetHAL().syncSystemTimeToRtc();
+    });
+    esp_sntp_init();
+}
+
+void Hal::sntp_sync()
+{
+    if (!esp_sntp_enabled()) {
+        sntp_init();
+    } else {
+        mclog::tagInfo(_tag, "restart sntp sync");
+        esp_sntp_restart();
+    }
+}
+
 void Hal::setTimezone(std::string_view tz)
 {
     setenv("TZ", tz.data(), 1);
@@ -126,7 +154,7 @@ void Hal::setTimezone(std::string_view tz)
 std::string Hal::getTimezone()
 {
     Settings settings("system", false);
-    return settings.GetString("tz", "GMT0");
+    return settings.GetString("tz", "CST-8");
 }
 
 DateYmd Hal::getDateYmd()

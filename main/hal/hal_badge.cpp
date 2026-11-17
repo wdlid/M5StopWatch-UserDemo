@@ -48,7 +48,7 @@ std::string slot_image_path(std::size_t slot, std::string_view extension)
 std::string slot_raw_path(std::size_t slot)
 {
     char path[96] = {};
-    snprintf(path, sizeof(path), "%s/slot_%u.raw", _badge_dir, static_cast<unsigned>(slot));
+    snprintf(path, sizeof(path), "%s/slot_%u_v2.raw", _badge_dir, static_cast<unsigned>(slot));
     return std::string(path);
 }
 
@@ -349,21 +349,26 @@ static bool ensure_badge_buffer()
     return true;
 }
 
-static bool convert_jpg_to_raw(const std::string& jpg_path, const std::string& raw_path, uint8_t* out_buf = nullptr)
+static bool convert_image_to_raw(const std::string& img_path, const std::string& raw_path, uint8_t* out_buf = nullptr)
 {
-    std::vector<uint8_t> jpg_data;
-    if (!read_binary_file(jpg_path, jpg_data)) {
+    std::vector<uint8_t> img_data;
+    if (!read_binary_file(img_path, img_data)) {
         return false;
     }
 
     LGFX_Sprite sprite;
-    sprite.setColorDepth(16);
+    sprite.setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);
     sprite.setPsram(true);
     if (!sprite.createSprite(466, 466)) {
         return false;
     }
 
-    sprite.drawJpg(jpg_data.data(), jpg_data.size(), 0, 0);
+    if (img_path.size() >= 4 && (img_path.substr(img_path.size() - 4) == ".png" || img_path.substr(img_path.size() - 4) == ".PNG")) {
+        sprite.drawPng(img_data.data(), img_data.size(), 0, 0);
+    } else {
+        sprite.drawJpg(img_data.data(), img_data.size(), 0, 0);
+    }
+
     const void* buf = sprite.getBuffer();
     if (buf == nullptr) {
         sprite.deleteSprite();
@@ -397,6 +402,11 @@ bool load_badge_slot(lv_obj_t* image, std::size_t slot)
     const std::string raw_path = slot_raw_path(slot);
     bool loaded = false;
 
+    // Clean up obsolete v1 raw file if present
+    char old_raw[96] = {};
+    snprintf(old_raw, sizeof(old_raw), "%s/slot_%u.raw", _badge_dir, static_cast<unsigned>(slot));
+    unlink(old_raw);
+
     // 1. Fast path: load pre-decoded RGB565 from raw file (~15ms)
     FILE* f = fopen(raw_path.c_str(), "rb");
     if (f != nullptr) {
@@ -407,12 +417,12 @@ bool load_badge_slot(lv_obj_t* image, std::size_t slot)
         }
     }
 
-    // 2. Fallback: decode JPG on first load and cache as .raw
+    // 2. Fallback: decode JPG/PNG on first load and cache as .raw
     if (!loaded) {
         const std::string ext = read_slot_extension(slot);
         if (!ext.empty()) {
-            const std::string jpg_path = slot_image_path(slot, ext);
-            if (convert_jpg_to_raw(jpg_path, raw_path, _badge_rgb565_buf)) {
+            const std::string img_path = slot_image_path(slot, ext);
+            if (convert_image_to_raw(img_path, raw_path, _badge_rgb565_buf)) {
                 loaded = true;
             }
         }
@@ -564,6 +574,9 @@ bool delete_badge_slot(std::size_t slot, std::string& message)
     }
 
     unlink(slot_raw_path(slot).c_str());
+    char old_raw[96] = {};
+    snprintf(old_raw, sizeof(old_raw), "%s/slot_%u.raw", _badge_dir, static_cast<unsigned>(slot));
+    unlink(old_raw);
 
     const std::string meta_path = slot_meta_path(slot);
     if (unlink(meta_path.c_str()) == 0) {
@@ -649,7 +662,10 @@ bool save_badge_upload(const badge::config_ap::UploadRequest& request, std::stri
 
     // Convert to pre-decoded raw RGB565 cache immediately for instant display
     unlink(slot_raw_path(request.slot).c_str());
-    convert_jpg_to_raw(final_path, slot_raw_path(request.slot));
+    char old_raw_upload[96] = {};
+    snprintf(old_raw_upload, sizeof(old_raw_upload), "%s/slot_%u.raw", _badge_dir, static_cast<unsigned>(request.slot));
+    unlink(old_raw_upload);
+    convert_image_to_raw(final_path, slot_raw_path(request.slot));
 
     // Activate the newly uploaded slot
     auto active = read_active_slots();
@@ -756,7 +772,7 @@ bool Hal::setBadgeSlotActive(std::size_t slot, bool active)
 
 bool Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
 {
-    mclog::tagInfo(_tag, "start badge edit mode via AP");
+    mclog::tagInfo(_tag, "start badge edit mode");
 
     if (!ensure_badge_dir()) {
         if (onLog) {
@@ -765,7 +781,13 @@ bool Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
         return false;
     }
 
-    wifi_enter_badge_ap();
+    auto wifiStatus = getWifiStatus();
+    const bool use_existing_wifi = wifiStatus.connected && !wifiStatus.ipAddress.empty();
+
+    if (!use_existing_wifi) {
+        wifi_enter_badge_ap();
+    }
+
     bool exitToHome = false;
     badge::config_ap::run(onLog,
                           {
@@ -777,6 +799,9 @@ bool Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
                               .onDelete      = delete_badge_slot,
                           },
                           &exitToHome);
-    wifi_exit_badge_ap();
+
+    if (!use_existing_wifi) {
+        wifi_exit_badge_ap();
+    }
     return exitToHome;
 }

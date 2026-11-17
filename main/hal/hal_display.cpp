@@ -188,6 +188,9 @@ void Hal::display_init()
     // Load brightness from settings
     auto brightness = getBackLightBrightness(true);
     setBackLightBrightness(brightness, false);
+
+    getScreenTimeout(true);
+    _last_activity_time = millis();
 }
 
 LGFX_Device &Hal::getDisplay()
@@ -205,20 +208,26 @@ void Hal::updateCanvas()
     _canvas->pushSprite(0, 0);
 }
 
+static bool _screen_sleeping        = false;
+static uint32_t _screen_timeout_sec = 30;
+static uint32_t _last_activity_time = 0;
+
 void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
 {
     _bl_brightness = uitk::clamp(brightness, 0, 100);
 
-    int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
+    if (!_screen_sleeping) {
+        int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
 
-    // Never illuminate the redundant power LED while the AMOLED is on. Turn
-    // it back on only when brightness is explicitly set to zero.
-    if (_bl_brightness > 0) {
-        setPowerLed(false);
-    }
-    _display->setBrightness(set_target);
-    if (_bl_brightness == 0) {
-        setPowerLed(true);
+        // Never illuminate the redundant power LED while the AMOLED is on. Turn
+        // it back on only when brightness is explicitly set to zero.
+        if (_bl_brightness > 0) {
+            setPowerLed(false);
+        }
+        _display->setBrightness(set_target);
+        if (_bl_brightness == 0) {
+            setPowerLed(true);
+        }
     }
 
     if (saveToSettings) {
@@ -237,6 +246,72 @@ int Hal::getBackLightBrightness(bool loadFromSettings)
         mclog::tagInfo(_tag, "brightness loaded from settings: {}", _bl_brightness);
     }
     return _bl_brightness;
+}
+
+void Hal::setScreenTimeout(uint32_t seconds, bool saveToSettings)
+{
+    _screen_timeout_sec = seconds;
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("scr_timeout", static_cast<int>(seconds));
+        mclog::tagInfo(_tag, "screen timeout saved: {} s", seconds);
+    }
+}
+
+uint32_t Hal::getScreenTimeout(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        _screen_timeout_sec = static_cast<uint32_t>(settings.GetInt("scr_timeout", 30));
+        mclog::tagInfo(_tag, "screen timeout loaded: {} s", _screen_timeout_sec);
+    }
+    return _screen_timeout_sec;
+}
+
+bool Hal::isScreenSleeping() const
+{
+    return _screen_sleeping;
+}
+
+void Hal::sleepScreen()
+{
+    if (_screen_sleeping) {
+        return;
+    }
+    _screen_sleeping = true;
+    _display->setBrightness(0);
+    setPowerLed(false);
+    mclog::tagInfo(_tag, "screen sleep");
+}
+
+void Hal::wakeScreen()
+{
+    if (!_screen_sleeping) {
+        return;
+    }
+    _screen_sleeping = false;
+    _last_activity_time = millis();
+    int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
+    _display->setBrightness(set_target);
+    setPowerLed(false);
+    mclog::tagInfo(_tag, "screen wake");
+}
+
+void Hal::resetActivityTimer()
+{
+    _last_activity_time = millis();
+}
+
+void Hal::display_tick()
+{
+    if (_screen_timeout_sec == 0 || _screen_sleeping) {
+        return;
+    }
+    if (millis() - _last_activity_time >= _screen_timeout_sec * 1000) {
+        if (!isOtaRunning()) {
+            sleepScreen();
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -375,6 +450,12 @@ static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     if (tp.num == 0) {
         data->state = LV_INDEV_STATE_REL;
     } else {
+        if (GetHAL().isScreenSleeping()) {
+            GetHAL().wakeScreen();
+            data->state = LV_INDEV_STATE_REL;
+            return;
+        }
+        GetHAL().resetActivityTimer();
         data->state   = LV_INDEV_STATE_PR;
         data->point.x = tp.x;
         data->point.y = tp.y;

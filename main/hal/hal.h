@@ -163,6 +163,13 @@ public:
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
     int getBackLightBrightness(bool loadFromSettings = false);
+    void setScreenTimeout(uint32_t seconds, bool saveToSettings = true);
+    uint32_t getScreenTimeout(bool loadFromSettings = false);
+    bool isScreenSleeping() const;
+    void sleepScreen();
+    void wakeScreen();
+    void resetActivityTimer();
+    void display_tick();
 
     // M5GFX
     LGFX_Device& getDisplay();
@@ -227,6 +234,8 @@ public:
     /* ---------------------------------- Time ---------------------------------- */
     void syncRtcTimeToSystem();
     void syncSystemTimeToRtc();
+    void sntp_init();
+    void sntp_sync();
     DateYmd getDateYmd();
     bool setDateYmd(const DateYmd& date);
     TimeHms getTimeHms();
