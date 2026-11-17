@@ -278,6 +278,8 @@ public:
     void setWifiEnabled(bool enabled, bool saveToSettings = true);
     bool isWifiEnabled(bool loadFromSettings = false);
     WifiStatus getWifiStatus();
+    void wifi_enter_badge_ap();
+    void wifi_exit_badge_ap();
 
     /* ---------------------------------- Badge --------------------------------- */
     bool loadBadgeImage(lv_obj_t* image);
@@ -346,8 +348,6 @@ private:
     void fs_init();
     void wifi_init();
     void wifi_tick();
-    void wifi_enter_badge_ap();
-    void wifi_exit_badge_ap();
 };
 
 Hal& GetHAL();
