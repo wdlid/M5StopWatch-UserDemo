@@ -368,6 +368,8 @@ void Hal::wakeScreen()
     _display->setBrightness(set_target);
     setPowerLed(false);
     mclog::tagInfo(_tag, "screen wake");
+
+    wifi_on_screen_wake();
 }
 
 void Hal::resetActivityTimer()

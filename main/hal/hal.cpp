@@ -69,6 +69,7 @@ std::uint32_t Hal::millis()
 
 void Hal::feedTheDog()
 {
+    pwr_button_tick();
     wifi_tick();
     display_tick();
     eye_care_tick();

@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <cmath>
+#include <esp_sleep.h>
 
 static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
@@ -118,6 +119,7 @@ void Hal::pmic_init()
     _pm1->gpioSetPull(PMG2_CHG_STAT, M5PM1_GPIO_PULL_NONE);
 
     _pm1->setSingleResetDisable(true);
+    _pm1->setDoubleOffDisable(true);
 
     uint16_t battery_mv = 0;
     if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
@@ -129,11 +131,35 @@ void Hal::pmic_init()
 
 bool Hal::pmic_get_pwr_btn_state()
 {
-    bool result = false;
-    if (_pm1) {
-        return _pm1->btnGetState(&result);
+    bool pressed = false;
+    if (_pm1 && _pm1->btnGetState(&pressed) == M5PM1_OK) {
+        return pressed;
     }
-    return result;
+    return false;
+}
+
+bool Hal::pmic_get_double_click_flag()
+{
+    if (!_pm1) {
+        return false;
+    }
+    uint8_t status = 0;
+    if (_pm1->irqGetBtnStatus(&status, M5PM1_CLEAN_ONCE) == M5PM1_OK) {
+        return (status & 0x04) != 0;
+    }
+    return false;
+}
+
+void Hal::powerOff()
+{
+    mclog::tagInfo(_tag, "power off requested");
+    vibrate(120, 100);
+    delay(150);
+    if (_pm1) {
+        _pm1->shutdown();
+    }
+    sleepScreen();
+    esp_deep_sleep_start();
 }
 
 void Hal::setPowerLed(bool enabled)

@@ -159,6 +159,7 @@ public:
     uint8_t getBatteryLevel();
     bool isBatteryCharging(bool strict = false);
     void setPowerLed(bool enabled);
+    void powerOff();
 
     /* --------------------------------- Display -------------------------------- */
     enum class ColorTemp : uint8_t {
@@ -267,6 +268,7 @@ public:
     };
 
     void updateButtonStates();
+    void pwr_button_tick();
     void setButtonConfig(ButtonConfig config, bool saveToSettings = false);
     const ButtonConfig& getButtonConfig(bool loadFromSettings = false);
 
@@ -298,6 +300,7 @@ public:
     WifiStatus getWifiStatus();
     void wifi_enter_badge_ap();
     void wifi_exit_badge_ap();
+    void wifi_on_screen_wake();
 
     /* ---------------------------------- Badge --------------------------------- */
     bool loadBadgeImage(lv_obj_t* image);
@@ -359,6 +362,7 @@ private:
     void i2c_detect();
     void pmic_init();
     bool pmic_get_pwr_btn_state();
+    bool pmic_get_double_click_flag();
     void ioe_init();
     void ioe_tp_reset();
     void ioe_speaker_enable(bool enable);

@@ -57,6 +57,7 @@ public:
         bool should_fallback_to_ap = false;
         bool should_restart_sta    = false;
         bool should_sync_sntp      = false;
+        bool should_suspend_wifi   = false;
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
             const uint32_t now = millis();
@@ -71,6 +72,27 @@ public:
             if (should_sync_sntp) {
                 _sntp_sync_requested = false;
             }
+
+            // Standby Wi-Fi auto-sleep: Stop Wi-Fi 3 minutes after screen sleeps
+            if (_wifi_enabled && !_wifi_suspended && !_badge_active && GetHAL().isScreenSleeping()) {
+                if (_screen_sleep_start_ms == 0) {
+                    _screen_sleep_start_ms = now;
+                } else if (now - _screen_sleep_start_ms >= 180000) {  // 3 minutes (180s)
+                    if (!GetHAL().isOtaRunning()) {
+                        should_suspend_wifi = true;
+                        _wifi_suspended     = true;
+                    }
+                }
+            } else if (!GetHAL().isScreenSleeping()) {
+                _screen_sleep_start_ms = 0;
+            }
+        }
+
+        if (should_suspend_wifi) {
+            mclog::tagInfo(_tag, "screen asleep for 3 mins: stopping Wi-Fi for power saving");
+            stop_wifi_owner();
+            set_off_status("Standby power save");
+            return;
         }
 
         if (should_fallback_to_ap) {
@@ -100,6 +122,8 @@ public:
             _wifi_enabled              = enabled;
             _status.enabled            = enabled;
             _restart_station_requested = false;
+            _wifi_suspended            = false;
+            _screen_sleep_start_ms     = 0;
         }
 
         if (enabled) {
@@ -180,6 +204,23 @@ public:
             start_station_or_config_ap("Resuming Wi-Fi");
         } else {
             set_off_status("Wi-Fi off");
+        }
+    }
+
+    void on_screen_wake()
+    {
+        bool should_reconnect = false;
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _screen_sleep_start_ms = 0;
+            if (_wifi_suspended) {
+                _wifi_suspended  = false;
+                should_reconnect = _wifi_enabled && !_badge_active;
+            }
+        }
+        if (should_reconnect) {
+            mclog::tagInfo(_tag, "screen wake: resuming Wi-Fi connection");
+            start_station_or_config_ap("Wake from sleep");
         }
     }
 
@@ -402,6 +443,8 @@ private:
     bool _badge_active               = false;
     bool _restart_station_requested  = false;
     bool _sntp_sync_requested        = false;
+    bool _wifi_suspended             = false;
+    uint32_t _screen_sleep_start_ms  = 0;
     uint32_t _station_deadline_ms    = 0;
     Hal::WifiStatus _status;
 
@@ -448,4 +491,9 @@ void Hal::wifi_enter_badge_ap()
 void Hal::wifi_exit_badge_ap()
 {
     get_network_controller().exit_badge_ap();
+}
+
+void Hal::wifi_on_screen_wake()
+{
+    get_network_controller().on_screen_wake();
 }

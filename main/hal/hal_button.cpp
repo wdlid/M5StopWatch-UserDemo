@@ -15,6 +15,7 @@ static const std::string_view _tag = "HAL-BTN";
 // USER BUTTON
 #define USER_BUTTONA_PIN (gpio_num_t)2
 #define USER_BUTTONB_PIN (gpio_num_t)1
+#define BOOT_BUTTON_PIN  (gpio_num_t)0
 
 void Hal::button_init()
 {
@@ -28,15 +29,82 @@ void Hal::button_init()
     gpio_set_direction(USER_BUTTONB_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(USER_BUTTONB_PIN, GPIO_PULLUP_ONLY);
 
+    gpio_reset_pin(BOOT_BUTTON_PIN);
+    gpio_set_direction(BOOT_BUTTON_PIN, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(BOOT_BUTTON_PIN, GPIO_PULLUP_ONLY);
+
+    btnPwr.setHoldThresh(500);
+
     // Load config from settings
     getButtonConfig(true);
 }
 
+void Hal::pwr_button_tick()
+{
+    static uint32_t _last_poll = 0;
+    const uint32_t now = millis();
+    if (now - _last_poll < 20) {
+        return;
+    }
+    _last_poll = now;
+
+    const bool pwr_raw = pmic_get_pwr_btn_state() || !gpio_get_level(BOOT_BUTTON_PIN);
+    btnPwr.setRawState(now, pwr_raw);
+
+    auto& config = getButtonConfig();
+
+    if (btnPwr.wasPressed()) {
+        if (isScreenSleeping()) {
+            wakeScreen();
+        } else {
+            resetActivityTimer();
+        }
+    }
+
+    // Long press (>= 2.0s): Power off / 关机
+    if (btnPwr.pressedFor(2000)) {
+        static bool shutdown_triggered = false;
+        if (!shutdown_triggered) {
+            shutdown_triggered = true;
+            mclog::tagInfo(_tag, "power/boot button held 2s: power off");
+            if (config.sfxEnabled) {
+                audio::play_tone(800, 0.15);
+            }
+            if (config.vibrateEnabled) {
+                vibrate(200, 100);
+            }
+            powerOff();
+        }
+    } else {
+        // Double click: Toggle standby / 待机
+        bool double_clicked = btnPwr.wasDoubleClicked() ||
+                              (btnPwr.wasClicked() && btnPwr.getClickCount() >= 2) ||
+                              pmic_get_double_click_flag();
+
+        if (double_clicked) {
+            mclog::tagInfo(_tag, "power/boot button double clicked: toggle standby");
+            if (config.sfxEnabled) {
+                audio::play_tone(1500, 0.04);
+            }
+            if (config.vibrateEnabled) {
+                vibrate(30, 80);
+            }
+            if (isScreenSleeping()) {
+                wakeScreen();
+            } else {
+                sleepScreen();
+            }
+        }
+    }
+}
+
 void Hal::updateButtonStates()
 {
-    btnA.setRawState(millis(), !gpio_get_level(USER_BUTTONA_PIN));
-    btnB.setRawState(millis(), !gpio_get_level(USER_BUTTONB_PIN));
-    // btnPwr.setRawState(millis(), pmic_get_pwr_btn_state());
+    const uint32_t now = millis();
+    btnA.setRawState(now, !gpio_get_level(USER_BUTTONA_PIN));
+    btnB.setRawState(now, !gpio_get_level(USER_BUTTONB_PIN));
+
+    pwr_button_tick();
 
     auto& config = getButtonConfig();
     if (btnA.wasPressed() || btnB.wasPressed()) {
