@@ -80,6 +80,11 @@ void AppSetup::onOpen()
         {
             "Firmware",
             {
+                {"OTA Update",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<OtaWorker>();
+                 }},
                 {fmt::format("Version: {}", common::FirmwareVersion),
                  [&]() {
                      _magic_count++;

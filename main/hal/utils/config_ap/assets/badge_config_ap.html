@@ -344,7 +344,10 @@
 
 <body>
   <main class="card">
-    <h1>Badge Manager</h1>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h1 style="margin:0;">Badge Manager</h1>
+      <a href="/ota" style="font-size:13px; font-weight:600; color:#176ff2; text-decoration:none; padding:6px 12px; background:#eef4ff; border-radius:8px; border:1px solid #d7e1f4;">OTA Update &rarr;</a>
+    </div>
 
     <section class="section-grid">
       <section class="panel">
@@ -354,6 +357,21 @@
           <button id="setActive" type="button" class="ghost">Set Active</button>
           <button id="deleteSlot" type="button" class="secondary">Delete</button>
           <button id="refresh" type="button" class="ghost">Refresh</button>
+        </div>
+        <div class="carousel-box" style="margin-top:14px; padding:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">
+          <div style="font-size:13px; font-weight:600; color:#334155; margin-bottom:6px;">Carousel / Rotation Interval</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select id="carouselIntervalSelect" style="flex:1; padding:7px 10px; border-radius:6px; border:1px solid #cbd5e1; font-size:14px; background:#fff;">
+              <option value="0">Off (Manual only)</option>
+              <option value="3">3 seconds</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="15">15 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="60">1 minute</option>
+            </select>
+            <button id="saveIntervalBtn" type="button" class="ghost" style="padding:7px 14px; font-size:13px;">Save</button>
+          </div>
         </div>
       </section>
 
@@ -445,7 +463,8 @@
     function updateSelectionUi() {
       const slot = selectedSlotState();
       const canUseImage = !!(slot && slot.hasImage);
-      setActiveButton.disabled = !canUseImage || !!(slot && slot.isActive);
+      setActiveButton.disabled = !canUseImage;
+      setActiveButton.textContent = (slot && slot.isActive) ? 'Deactivate' : 'Set Active';
       deleteSlotButton.disabled = !canUseImage;
     }
 
@@ -538,6 +557,13 @@
         editorState.selectedSlot = state.activeSlot || 0;
       }
 
+      if (state.carouselInterval !== undefined) {
+        const sel = document.getElementById('carouselIntervalSelect');
+        if (sel) {
+          sel.value = String(state.carouselInterval);
+        }
+      }
+
       slotsGrid.innerHTML = '';
       state.slots.forEach((slot) => {
         const tile = document.createElement('div');
@@ -547,7 +573,9 @@
         const thumb = slot.hasImage
           ? `<img src="${slot.imageUrl}&t=${Date.now()}" alt="Slot ${slot.slot + 1}" />`
           : `<span class="slot-empty">Empty</span>`;
-        const badge = slot.isActive ? '<span class="badge">Active</span>' : '';
+        const badge = slot.isActive
+          ? '<span class="badge" style="background:#22c55e;color:#fff;">Active</span>'
+          : (slot.hasImage ? '<span class="badge" style="background:#e2e8f0;color:#64748b;">Inactive</span>' : '');
         tile.innerHTML = `
           <div class="slot-thumb">${thumb}</div>
           <div class="slot-footer">
@@ -566,15 +594,34 @@
       renderState(state);
     }
 
-    async function setActive(slot) {
+    async function toggleActive(slot) {
       setBusy(true);
-      setStatus(`Updating active slot ${Number(slot) + 1}...`);
+      const targetSlot = slot !== undefined ? slot : editorState.selectedSlot;
+      const slotObj = editorState.badgeState?.slots?.find((s) => s.slot === targetSlot);
+      const newActive = slotObj ? !slotObj.isActive : true;
+      setStatus(`Updating slot ${Number(targetSlot) + 1} active state...`);
       try {
-        const result = await fetchJson(`/badge/active?slot=${slot}`, { method: 'POST' });
+        const result = await fetchJson(`/badge/active?slot=${targetSlot}&active=${newActive ? 1 : 0}`, { method: 'POST' });
         await refreshState();
-        setStatus(result.message || 'Active slot updated.');
+        setStatus(result.message || 'Active state updated.');
       } catch (error) {
-        setStatus(error.message || 'Failed to update active slot.', true);
+        setStatus(error.message || 'Failed to update active state.', true);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function saveInterval() {
+      const sel = document.getElementById('carouselIntervalSelect');
+      const val = sel ? sel.value : '5';
+      setBusy(true);
+      setStatus('Saving carousel interval...');
+      try {
+        const result = await fetchJson(`/badge/interval?seconds=${val}`, { method: 'POST' });
+        await refreshState();
+        setStatus(result.message || 'Interval updated.');
+      } catch (error) {
+        setStatus(error.message || 'Failed to update interval.', true);
       } finally {
         setBusy(false);
       }
@@ -745,7 +792,11 @@
         setBusy(false);
       }
     });
-    setActiveButton.addEventListener('click', () => setActive(editorState.selectedSlot));
+    setActiveButton.addEventListener('click', () => toggleActive(editorState.selectedSlot));
+    const saveIntervalBtn = document.getElementById('saveIntervalBtn');
+    if (saveIntervalBtn) {
+      saveIntervalBtn.addEventListener('click', saveInterval);
+    }
     deleteSlotButton.addEventListener('click', () => deleteSlot(editorState.selectedSlot));
     closeButton.addEventListener('click', closePage);
 

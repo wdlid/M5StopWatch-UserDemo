@@ -155,4 +155,19 @@ private:
     int _pending_burst_steps     = 0;
 };
 
+/**
+ * @brief
+ *
+ */
+class OtaWorker : public WorkerBase {
+public:
+    OtaWorker();
+    ~OtaWorker();
+    void update() override;
+
+private:
+    class OtaView;
+    std::unique_ptr<OtaView> _view;
+};
+
 }  // namespace setup_workers

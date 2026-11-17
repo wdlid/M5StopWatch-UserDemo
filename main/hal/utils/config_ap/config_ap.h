@@ -20,8 +20,9 @@ struct SlotState {
 };
 
 struct BadgeState {
-    std::size_t slotCount  = 0;
-    std::size_t activeSlot = 0;
+    std::size_t slotCount        = 0;
+    std::size_t activeSlot       = 0;
+    uint32_t carouselIntervalSec = 5;
     std::vector<SlotState> slots;
 };
 
@@ -37,20 +38,23 @@ struct UploadRequest {
     std::vector<uint8_t> data;
 };
 
-using UploadHandler    = std::function<bool(const UploadRequest&, std::string&)>;
-using StateHandler     = std::function<BadgeState()>;
-using ImageHandler     = std::function<bool(std::size_t, ImageData&, std::string&)>;
-using SetActiveHandler = std::function<bool(std::size_t, std::string&)>;
-using DeleteHandler    = std::function<bool(std::size_t, std::string&)>;
+using UploadHandler      = std::function<bool(const UploadRequest&, std::string&)>;
+using StateHandler       = std::function<BadgeState()>;
+using ImageHandler       = std::function<bool(std::size_t, ImageData&, std::string&)>;
+using SetActiveHandler   = std::function<bool(std::size_t, bool, std::string&)>;
+using SetIntervalHandler = std::function<bool(uint32_t, std::string&)>;
+using DeleteHandler      = std::function<bool(std::size_t, std::string&)>;
 
 struct Callbacks {
     UploadHandler onUpload;
     StateHandler onGetState;
     ImageHandler onGetImage;
     SetActiveHandler onSetActive;
+    SetIntervalHandler onSetInterval;
     DeleteHandler onDelete;
 };
 
-bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks);
+bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks,
+         bool* outExitToHome = nullptr);
 
 }  // namespace badge::config_ap

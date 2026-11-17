@@ -5,6 +5,10 @@
  */
 #include "config_ap.h"
 
+#include <apps/common/key_manager/key_manager.h>
+#include <hal/hal.h>
+#include <hal/utils/ota/ota.h>
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -132,12 +136,30 @@ public:
 
         log("Connect to Wi-Fi: " + _ssid + "\nAnd open page:\n" + std::string(_ap_url));
 
-        xEventGroupWaitBits(_event_group, _exit_requested_bit, pdTRUE, pdFALSE, portMAX_DELAY);
+        input::KeyManager key_manager;
+        while (true) {
+            EventBits_t bits =
+                xEventGroupWaitBits(_event_group, _exit_requested_bit, pdTRUE, pdFALSE, pdMS_TO_TICKS(50));
+            if (bits & _exit_requested_bit) {
+                break;
+            }
+
+            GetHAL().feedTheDog();
+            if (key_manager.update() == input::KeyEvent::GoHome) {
+                _exit_to_home = true;
+                break;
+            }
+        }
 
         stop();
 
         log("Exited edit mode");
         return true;
+    }
+
+    bool exitToHomeRequested() const
+    {
+        return _exit_to_home;
     }
 
 private:
@@ -254,6 +276,12 @@ private:
             .handler  = &Session::handle_set_active,
             .user_ctx = this,
         };
+        httpd_uri_t interval = {
+            .uri      = "/badge/interval",
+            .method   = HTTP_POST,
+            .handler  = &Session::handle_set_interval,
+            .user_ctx = this,
+        };
         httpd_uri_t remove = {
             .uri      = "/badge/image",
             .method   = HTTP_DELETE,
@@ -285,6 +313,9 @@ private:
             ret = httpd_register_uri_handler(_server, &active);
         }
         if (ret == ESP_OK) {
+            ret = httpd_register_uri_handler(_server, &interval);
+        }
+        if (ret == ESP_OK) {
             ret = httpd_register_uri_handler(_server, &remove);
         }
         if (ret == ESP_OK) {
@@ -301,6 +332,9 @@ private:
                     break;
                 }
             }
+        }
+        if (ret == ESP_OK) {
+            ota::OtaManager::getInstance().registerHttpdHandlers(_server);
         }
         if (ret != ESP_OK) {
             log("Failed to register web routes");
@@ -372,6 +406,7 @@ private:
         json += "\"apUrl\":\"" + std::string(_ap_url) + "\",";
         json += "\"slotCount\":" + std::to_string(state.slotCount) + ",";
         json += "\"activeSlot\":" + std::to_string(state.activeSlot) + ",";
+        json += "\"carouselInterval\":" + std::to_string(state.carouselIntervalSec) + ",";
         json += "\"slots\":[";
         for (std::size_t index = 0; index < state.slots.size(); ++index) {
             const auto& slot = state.slots[index];
@@ -453,9 +488,49 @@ private:
             return ESP_FAIL;
         }
 
+        bool active = true;
+        char query[64] = {};
+        if (httpd_req_get_url_query_len(req) > 0 &&
+            httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char val[16] = {};
+            if (httpd_query_key_value(query, "active", val, sizeof(val)) == ESP_OK) {
+                active = (strcmp(val, "0") != 0 && strcmp(val, "false") != 0);
+            }
+        }
+
         std::string message;
-        if (!self->_callbacks.onSetActive(slot, message)) {
+        if (!self->_callbacks.onSetActive(slot, active, message)) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, message.empty() ? "set active failed" : message.c_str());
+            return ESP_FAIL;
+        }
+
+        send_json(req, make_message_json("ok", message));
+        return ESP_OK;
+    }
+
+    static esp_err_t handle_set_interval(httpd_req_t* req)
+    {
+        auto* self = self_from_request(req);
+        if (self == nullptr || self->_callbacks.onSetInterval == nullptr) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set interval handler missing");
+            return ESP_FAIL;
+        }
+
+        char query[64] = {};
+        uint32_t seconds = 5;
+        if (httpd_req_get_url_query_len(req) > 0 &&
+            httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char val[16] = {};
+            if (httpd_query_key_value(query, "seconds", val, sizeof(val)) == ESP_OK ||
+                httpd_query_key_value(query, "interval", val, sizeof(val)) == ESP_OK) {
+                seconds = static_cast<uint32_t>(strtoul(val, nullptr, 10));
+            }
+        }
+
+        std::string message;
+        if (!self->_callbacks.onSetInterval(seconds, message)) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                message.empty() ? "set interval failed" : message.c_str());
             return ESP_FAIL;
         }
 
@@ -577,13 +652,19 @@ private:
     std::string _ssid;
     std::unique_ptr<DnsServer> _dns_server;
     esp_netif_t* _ap_netif = nullptr;
+    bool _exit_to_home     = false;
 };
 
 }  // namespace
 
-bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks)
+bool run(const std::function<void(std::string_view)>& onLog, const Callbacks& callbacks, bool* outExitToHome)
 {
-    return Session(onLog, callbacks).run();
+    Session session(onLog, callbacks);
+    bool result = session.run();
+    if (outExitToHome != nullptr) {
+        *outExitToHome = session.exitToHomeRequested();
+    }
+    return result;
 }
 
 }  // namespace badge::config_ap

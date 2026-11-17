@@ -26,4 +26,5 @@ public:
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<view::BadgeView> _badge_view;
+    uint32_t _next_carousel_tick = 0;
 };

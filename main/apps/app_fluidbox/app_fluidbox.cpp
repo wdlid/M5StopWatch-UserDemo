@@ -53,6 +53,7 @@ void AppFluidBox::onOpen()
     display.startWrite();
     display.fillScreen(TFT_BLACK);
     display.endWrite();
+    display.display();
 
     // The solver owns more than 100 KB of fixed working arrays, so keep it
     // allocated only while this demo is actually open.
@@ -157,6 +158,7 @@ void AppFluidBox::onClose()
     display.startWrite();
     display.fillScreen(TFT_BLACK);
     display.endWrite();
+    display.display();
 
     // Hand display ownership back to LVGL. Mark the active screen dirty so the
     // launcher repaint is never dependent on stale framebuffer contents.
@@ -217,6 +219,7 @@ void AppFluidBox::renderFrame()
         display.fillScreen(TFT_BLACK);
     }
     display.endWrite();
+    display.display();
 }
 
 void AppFluidBox::updateImu(int64_t nowMicros)

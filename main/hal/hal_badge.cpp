@@ -12,8 +12,11 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <esp_heap_caps.h>
+#include <M5GFX.h>
 
 #include <mooncake_log.h>
 
@@ -23,6 +26,8 @@ namespace {
 
 constexpr const char* _badge_dir            = "/spiflash/badge";
 constexpr const char* _active_slot_file     = "/spiflash/badge/active_slot.txt";
+constexpr const char* _active_slots_file    = "/spiflash/badge/active_slots.txt";
+constexpr const char* _interval_file        = "/spiflash/badge/interval.txt";
 constexpr std::size_t _max_badge_slot_count = 6;
 
 std::string slot_meta_path(std::size_t slot)
@@ -37,6 +42,13 @@ std::string slot_image_path(std::size_t slot, std::string_view extension)
     char path[96] = {};
     snprintf(path, sizeof(path), "%s/slot_%u.%.*s", _badge_dir, static_cast<unsigned>(slot),
              static_cast<int>(extension.size()), extension.data());
+    return std::string(path);
+}
+
+std::string slot_raw_path(std::size_t slot)
+{
+    char path[96] = {};
+    snprintf(path, sizeof(path), "%s/slot_%u.raw", _badge_dir, static_cast<unsigned>(slot));
     return std::string(path);
 }
 
@@ -225,6 +237,63 @@ bool clear_active_slot()
     return false;
 }
 
+std::vector<bool> read_active_slots()
+{
+    std::vector<bool> active(_max_badge_slot_count, false);
+    std::string text = read_text_file(_active_slots_file);
+    if (!text.empty()) {
+        char buf[64] = {};
+        strncpy(buf, text.c_str(), sizeof(buf) - 1);
+        char* token = strtok(buf, ", \t\r\n");
+        while (token != nullptr) {
+            unsigned long s = strtoul(token, nullptr, 10);
+            if (s < _max_badge_slot_count) {
+                active[s] = true;
+            }
+            token = strtok(nullptr, ", \t\r\n");
+        }
+    } else {
+        std::size_t legacy = read_active_slot();
+        if (legacy < _max_badge_slot_count) {
+            active[legacy] = true;
+        }
+    }
+    return active;
+}
+
+bool persist_active_slots(const std::vector<bool>& active)
+{
+    std::string s;
+    for (std::size_t i = 0; i < active.size() && i < _max_badge_slot_count; ++i) {
+        if (active[i]) {
+            if (!s.empty()) s += ",";
+            s += std::to_string(i);
+        }
+    }
+    write_text_file(_active_slots_file, s);
+    for (std::size_t i = 0; i < active.size() && i < _max_badge_slot_count; ++i) {
+        if (active[i]) {
+            persist_active_slot(i);
+            break;
+        }
+    }
+    return true;
+}
+
+uint32_t read_carousel_interval()
+{
+    std::string text = read_text_file(_interval_file);
+    if (text.empty()) {
+        return 5;
+    }
+    return static_cast<uint32_t>(strtoul(text.c_str(), nullptr, 10));
+}
+
+bool persist_carousel_interval(uint32_t seconds)
+{
+    return write_text_file(_interval_file, std::to_string(seconds));
+}
+
 std::size_t find_first_available_slot()
 {
     for (std::size_t slot = 0; slot < _max_badge_slot_count; ++slot) {
@@ -255,41 +324,173 @@ std::size_t find_available_slot(std::size_t current_slot, int direction)
     return _max_badge_slot_count;
 }
 
+static uint8_t* _badge_rgb565_buf = nullptr;
+static lv_image_dsc_t _badge_img_dsc = {};
+static std::size_t _current_loaded_slot = 0;
+
+static bool ensure_badge_buffer()
+{
+    if (_badge_rgb565_buf != nullptr) {
+        return true;
+    }
+    _badge_rgb565_buf = (uint8_t*)heap_caps_malloc(466 * 466 * 2, MALLOC_CAP_SPIRAM);
+    if (_badge_rgb565_buf == nullptr) {
+        mclog::tagError(_tag, "failed to allocate badge PSRAM buffer");
+        return false;
+    }
+    _badge_img_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    _badge_img_dsc.header.cf     = LV_COLOR_FORMAT_RGB565;
+    _badge_img_dsc.header.flags  = 0;
+    _badge_img_dsc.header.w      = 466;
+    _badge_img_dsc.header.h      = 466;
+    _badge_img_dsc.header.stride = 466 * 2;
+    _badge_img_dsc.data_size     = 466 * 466 * 2;
+    _badge_img_dsc.data          = _badge_rgb565_buf;
+    return true;
+}
+
+static bool convert_jpg_to_raw(const std::string& jpg_path, const std::string& raw_path, uint8_t* out_buf = nullptr)
+{
+    std::vector<uint8_t> jpg_data;
+    if (!read_binary_file(jpg_path, jpg_data)) {
+        return false;
+    }
+
+    LGFX_Sprite sprite;
+    sprite.setColorDepth(16);
+    sprite.setPsram(true);
+    if (!sprite.createSprite(466, 466)) {
+        return false;
+    }
+
+    sprite.drawJpg(jpg_data.data(), jpg_data.size(), 0, 0);
+    const void* buf = sprite.getBuffer();
+    if (buf == nullptr) {
+        sprite.deleteSprite();
+        return false;
+    }
+
+    if (out_buf != nullptr) {
+        memcpy(out_buf, buf, 466 * 466 * 2);
+    }
+
+    FILE* f = fopen(raw_path.c_str(), "wb");
+    if (f != nullptr) {
+        fwrite(buf, 1, 466 * 466 * 2, f);
+        fclose(f);
+    }
+
+    sprite.deleteSprite();
+    return true;
+}
+
 bool load_badge_slot(lv_obj_t* image, std::size_t slot)
 {
     if (image == nullptr || slot >= _max_badge_slot_count) {
         return false;
     }
 
-    const std::string extension = read_slot_extension(slot);
-    if (extension.empty()) {
+    if (!ensure_badge_buffer()) {
         return false;
     }
 
-    const std::string fs_path = slot_image_path(slot, extension);
-    if (access(fs_path.c_str(), R_OK) != 0) {
+    const std::string raw_path = slot_raw_path(slot);
+    bool loaded = false;
+
+    // 1. Fast path: load pre-decoded RGB565 from raw file (~15ms)
+    FILE* f = fopen(raw_path.c_str(), "rb");
+    if (f != nullptr) {
+        size_t n = fread(_badge_rgb565_buf, 1, 466 * 466 * 2, f);
+        fclose(f);
+        if (n == 466 * 466 * 2) {
+            loaded = true;
+        }
+    }
+
+    // 2. Fallback: decode JPG on first load and cache as .raw
+    if (!loaded) {
+        const std::string ext = read_slot_extension(slot);
+        if (!ext.empty()) {
+            const std::string jpg_path = slot_image_path(slot, ext);
+            if (convert_jpg_to_raw(jpg_path, raw_path, _badge_rgb565_buf)) {
+                loaded = true;
+            }
+        }
+    }
+
+    if (!loaded) {
         return false;
     }
 
-    const std::string lvgl_path = std::string("A:") + fs_path;
-    lv_image_set_src(image, lvgl_path.c_str());
+    _current_loaded_slot = slot;
+    lv_image_set_src(image, &_badge_img_dsc);
+    lv_obj_invalidate(image);
     persist_active_slot(slot);
-    mclog::tagInfo(_tag, "load badge image from {}, slot={}", fs_path, slot);
+    mclog::tagInfo(_tag, "instant loaded badge image, slot={}", slot);
     return true;
+}
+
+std::size_t find_next_active_slot(std::size_t current_slot)
+{
+    auto active = read_active_slots();
+    std::size_t active_count = 0;
+    for (std::size_t s = 0; s < _max_badge_slot_count; ++s) {
+        if (active[s] && is_slot_available(s)) {
+            active_count++;
+        }
+    }
+
+    if (active_count == 0) {
+        return find_available_slot(current_slot, 1);
+    }
+
+    for (std::size_t step = 1; step <= _max_badge_slot_count; ++step) {
+        std::size_t next = (current_slot + step) % _max_badge_slot_count;
+        if (active[next] && is_slot_available(next)) {
+            return next;
+        }
+    }
+    return current_slot;
+}
+
+std::size_t find_prev_active_slot(std::size_t current_slot)
+{
+    auto active = read_active_slots();
+    std::size_t active_count = 0;
+    for (std::size_t s = 0; s < _max_badge_slot_count; ++s) {
+        if (active[s] && is_slot_available(s)) {
+            active_count++;
+        }
+    }
+
+    if (active_count == 0) {
+        return find_available_slot(current_slot, -1);
+    }
+
+    for (std::size_t step = 1; step <= _max_badge_slot_count; ++step) {
+        std::size_t prev = (current_slot + _max_badge_slot_count - step) % _max_badge_slot_count;
+        if (active[prev] && is_slot_available(prev)) {
+            return prev;
+        }
+    }
+    return current_slot;
 }
 
 badge::config_ap::BadgeState make_badge_state()
 {
     badge::config_ap::BadgeState state;
-    state.slotCount  = _max_badge_slot_count;
-    state.activeSlot = read_active_slot();
+    state.slotCount           = _max_badge_slot_count;
+    state.activeSlot          = read_active_slot();
+    state.carouselIntervalSec = read_carousel_interval();
     state.slots.reserve(_max_badge_slot_count);
+
+    auto active_slots = read_active_slots();
 
     for (std::size_t slot = 0; slot < _max_badge_slot_count; ++slot) {
         state.slots.push_back({
             .slot     = slot,
             .hasImage = is_slot_available(slot),
-            .isActive = slot == state.activeSlot,
+            .isActive = active_slots[slot],
         });
     }
 
@@ -319,22 +520,31 @@ bool get_badge_image(std::size_t slot, badge::config_ap::ImageData& image, std::
     return true;
 }
 
-bool set_active_badge_slot(std::size_t slot, std::string& message)
+bool set_active_badge_slot(std::size_t slot, bool active, std::string& message)
 {
     if (slot >= _max_badge_slot_count) {
         message = "invalid badge slot";
         return false;
     }
-    if (!is_slot_available(slot)) {
-        message = "badge image not found";
-        return false;
-    }
-    if (!persist_active_slot(slot)) {
-        message = "failed to update active slot";
+
+    if (active && !is_slot_available(slot)) {
+        message = "cannot activate empty slot";
         return false;
     }
 
-    message = "active slot updated";
+    auto active_slots = read_active_slots();
+    active_slots[slot] = active;
+    persist_active_slots(active_slots);
+
+    message = active ? ("slot " + std::to_string(slot + 1) + " activated")
+                     : ("slot " + std::to_string(slot + 1) + " deactivated");
+    return true;
+}
+
+bool set_carousel_interval(uint32_t seconds, std::string& message)
+{
+    persist_carousel_interval(seconds);
+    message = "carousel interval updated to " + std::to_string(seconds) + "s";
     return true;
 }
 
@@ -353,6 +563,8 @@ bool delete_badge_slot(std::size_t slot, std::string& message)
         }
     }
 
+    unlink(slot_raw_path(slot).c_str());
+
     const std::string meta_path = slot_meta_path(slot);
     if (unlink(meta_path.c_str()) == 0) {
         deleted = true;
@@ -361,6 +573,12 @@ bool delete_badge_slot(std::size_t slot, std::string& message)
     if (!deleted) {
         message = "badge image not found";
         return false;
+    }
+
+    auto active = read_active_slots();
+    if (slot < active.size()) {
+        active[slot] = false;
+        persist_active_slots(active);
     }
 
     if (read_active_slot() == slot) {
@@ -428,9 +646,16 @@ bool save_badge_upload(const badge::config_ap::UploadRequest& request, std::stri
         message = "failed to store image metadata";
         return false;
     }
-    if (!write_text_file(_active_slot_file, std::to_string(request.slot))) {
-        message = "failed to store active slot";
-        return false;
+
+    // Convert to pre-decoded raw RGB565 cache immediately for instant display
+    unlink(slot_raw_path(request.slot).c_str());
+    convert_jpg_to_raw(final_path, slot_raw_path(request.slot));
+
+    // Activate the newly uploaded slot
+    auto active = read_active_slots();
+    if (request.slot < active.size()) {
+        active[request.slot] = true;
+        persist_active_slots(active);
     }
 
     mclog::tagInfo(_tag, "badge image saved, slot={}, path={}", request.slot, final_path);
@@ -446,9 +671,11 @@ bool Hal::loadBadgeImage(lv_obj_t* image)
         return false;
     }
 
-    const std::size_t active_slot = read_active_slot();
-    if (load_badge_slot(image, active_slot)) {
-        return true;
+    auto active = read_active_slots();
+    for (std::size_t s = 0; s < _max_badge_slot_count; ++s) {
+        if (active[s] && is_slot_available(s)) {
+            return load_badge_slot(image, s);
+        }
     }
 
     const std::size_t fallback_slot = find_first_available_slot();
@@ -465,7 +692,7 @@ bool Hal::loadNextBadgeImage(lv_obj_t* image)
 {
     mclog::tagInfo(_tag, "load next badge image");
 
-    const std::size_t slot = find_available_slot(read_active_slot(), 1);
+    const std::size_t slot = find_next_active_slot(_current_loaded_slot);
     if (slot < _max_badge_slot_count) {
         return load_badge_slot(image, slot);
     }
@@ -478,7 +705,7 @@ bool Hal::loadPreviousBadgeImage(lv_obj_t* image)
 {
     mclog::tagInfo(_tag, "load previous badge image");
 
-    const std::size_t slot = find_available_slot(read_active_slot(), -1);
+    const std::size_t slot = find_prev_active_slot(_current_loaded_slot);
     if (slot < _max_badge_slot_count) {
         return load_badge_slot(image, slot);
     }
@@ -487,7 +714,47 @@ bool Hal::loadPreviousBadgeImage(lv_obj_t* image)
     return false;
 }
 
-void Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
+bool Hal::loadNextActiveBadgeImage(lv_obj_t* image)
+{
+    if (image == nullptr) {
+        return false;
+    }
+
+    const std::size_t slot = find_next_active_slot(_current_loaded_slot);
+    if (slot == _current_loaded_slot) {
+        return true;
+    }
+
+    if (slot < _max_badge_slot_count) {
+        return load_badge_slot(image, slot);
+    }
+
+    return false;
+}
+
+uint32_t Hal::getBadgeCarouselIntervalMs()
+{
+    return read_carousel_interval() * 1000;
+}
+
+void Hal::setBadgeCarouselIntervalSeconds(uint32_t seconds)
+{
+    persist_carousel_interval(seconds);
+}
+
+bool Hal::isBadgeSlotActive(std::size_t slot)
+{
+    if (slot >= _max_badge_slot_count) return false;
+    return read_active_slots()[slot];
+}
+
+bool Hal::setBadgeSlotActive(std::size_t slot, bool active)
+{
+    std::string msg;
+    return set_active_badge_slot(slot, active, msg);
+}
+
+bool Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
 {
     mclog::tagInfo(_tag, "start badge edit mode via AP");
 
@@ -495,16 +762,21 @@ void Hal::startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog)
         if (onLog) {
             onLog("Failed to create badge storage directory");
         }
-        return;
+        return false;
     }
 
     wifi_enter_badge_ap();
-    badge::config_ap::run(onLog, {
-                                     .onUpload    = save_badge_upload,
-                                     .onGetState  = make_badge_state,
-                                     .onGetImage  = get_badge_image,
-                                     .onSetActive = set_active_badge_slot,
-                                     .onDelete    = delete_badge_slot,
-                                 });
+    bool exitToHome = false;
+    badge::config_ap::run(onLog,
+                          {
+                              .onUpload      = save_badge_upload,
+                              .onGetState    = make_badge_state,
+                              .onGetImage    = get_badge_image,
+                              .onSetActive   = set_active_badge_slot,
+                              .onSetInterval = set_carousel_interval,
+                              .onDelete      = delete_badge_slot,
+                          },
+                          &exitToHome);
     wifi_exit_badge_ap();
+    return exitToHome;
 }

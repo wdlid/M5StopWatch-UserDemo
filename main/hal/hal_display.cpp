@@ -11,6 +11,8 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <memory>
+#include <driver/gpio.h>
+#include <esp_timer.h>
 
 static const std::string_view _tag = "HAL-Display";
 
@@ -122,7 +124,7 @@ public:
 
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
-        enableFrameBuffer(true);
+        enableFrameBuffer(false);
 
         _panel_instance.setBrightness(128);
 
@@ -306,6 +308,23 @@ static void lvgl_rtos_task(void *pvParameter)
     }
 }
 
+static inline void wait_for_te()
+{
+    static int timeout_count = 0;
+    if (timeout_count > 5) {
+        return;
+    }
+    uint32_t start = esp_timer_get_time();
+    int initial_level = gpio_get_level(cfg_pin_te);
+    while (gpio_get_level(cfg_pin_te) == initial_level) {
+        if ((uint32_t)(esp_timer_get_time() - start) > 18000) {
+            timeout_count++;
+            return;
+        }
+    }
+    timeout_count = 0;
+}
+
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     M5GFX &gfx = *(M5GFX *)lv_display_get_driver_data(disp);
@@ -340,6 +359,11 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
     gfx.endWrite();
 
+    if (lv_display_flush_is_last(disp)) {
+        wait_for_te();
+        gfx.display();
+    }
+
     lv_display_flush_ready(disp);
 }
 
@@ -372,9 +396,9 @@ void Hal::lvgl_init()
     lv_display_set_driver_data(disp, _display.get());
     lv_display_set_flush_cb(disp, lvgl_flush_cb);
 
-    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, _display->width() * LV_BUFFER_LINE,
+    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, _display->width() * LV_BUFFER_LINE * sizeof(lv_color_t),
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     lvTouchpad = lv_indev_create();

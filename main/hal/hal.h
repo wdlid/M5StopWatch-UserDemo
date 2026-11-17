@@ -283,10 +283,41 @@ public:
     bool loadBadgeImage(lv_obj_t* image);
     bool loadNextBadgeImage(lv_obj_t* image);
     bool loadPreviousBadgeImage(lv_obj_t* image);
-    void startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog);
+    bool loadNextActiveBadgeImage(lv_obj_t* image);
+    uint32_t getBadgeCarouselIntervalMs();
+    void setBadgeCarouselIntervalSeconds(uint32_t seconds);
+    bool isBadgeSlotActive(std::size_t slot);
+    bool setBadgeSlotActive(std::size_t slot, bool active);
+    bool startBadgeEditModeViaAp(std::function<void(std::string_view)> onLog);
 
     /* ---------------------------------- Guide --------------------------------- */
     bool shouldShowGuide();
+
+    /* ----------------------------------- OTA ---------------------------------- */
+    enum class OtaState {
+        Idle,
+        Ready,
+        Flashing,
+        Success,
+        Failed
+    };
+
+    struct OtaStatus {
+        OtaState state = OtaState::Idle;
+        int progress   = 0;
+        std::size_t bytesReceived = 0;
+        std::size_t totalBytes    = 0;
+        std::string runningPartition;
+        std::string targetPartition;
+        std::string ipAddress;
+        std::string ssid;
+        std::string message;
+    };
+
+    bool startOta(std::function<void(std::string_view)> onLog = nullptr);
+    void stopOta();
+    bool isOtaRunning();
+    OtaStatus getOtaStatus();
 
 private:
     static constexpr std::string_view SettingsNs = "system";

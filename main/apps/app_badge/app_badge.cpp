@@ -38,6 +38,9 @@ void AppBadge::onOpen()
         bool loaded = GetHAL().loadBadgeImage(_badge_view->imageObject());
         _badge_view->setShowEditHint(!loaded);
     }
+
+    const uint32_t intervalMs = GetHAL().getBadgeCarouselIntervalMs();
+    _next_carousel_tick = GetHAL().millis() + (intervalMs > 0 ? intervalMs : 5000);
 }
 
 void AppBadge::onRunning()
@@ -54,12 +57,21 @@ void AppBadge::onRunning()
 
     LvglLockGuard lock;
 
+    const uint32_t intervalMs = GetHAL().getBadgeCarouselIntervalMs();
+    const uint32_t now        = GetHAL().millis();
+
     if (_badge_view && _badge_view->imageObject() != nullptr) {
         if (event == input::KeyEvent::GoPrevious) {
             bool loaded = GetHAL().loadPreviousBadgeImage(_badge_view->imageObject());
             _badge_view->setShowEditHint(!loaded);
+            _next_carousel_tick = now + (intervalMs > 0 ? intervalMs : 5000);
         } else if (event == input::KeyEvent::GoNext) {
             bool loaded = GetHAL().loadNextBadgeImage(_badge_view->imageObject());
+            _badge_view->setShowEditHint(!loaded);
+            _next_carousel_tick = now + (intervalMs > 0 ? intervalMs : 5000);
+        } else if (intervalMs > 0 && now >= _next_carousel_tick) {
+            _next_carousel_tick = now + intervalMs;
+            bool loaded = GetHAL().loadNextActiveBadgeImage(_badge_view->imageObject());
             _badge_view->setShowEditHint(!loaded);
         }
     }
@@ -72,17 +84,23 @@ void AppBadge::onRunning()
         mclog::info("start badge edit mode");
         auto loading_page = std::make_unique<view::LoadingPage>(0x2B2B2B, 0xFFFFFF);
         GetHAL().lvglUnlock();
-        GetHAL().startBadgeEditModeViaAp([&](std::string_view msg) {
+        bool exitToHome = GetHAL().startBadgeEditModeViaAp([&](std::string_view msg) {
             LvglLockGuard lock;
             loading_page->setMessage(msg);
         });
         GetHAL().lvglLock();
+
+        if (exitToHome) {
+            close();
+            return;
+        }
 
         // Reload image
         if (_badge_view->imageObject() != nullptr) {
             bool loaded = GetHAL().loadBadgeImage(_badge_view->imageObject());
             _badge_view->setShowEditHint(!loaded);
         }
+        _next_carousel_tick = GetHAL().millis() + (intervalMs > 0 ? intervalMs : 5000);
     }
 }
 
