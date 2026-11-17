@@ -56,6 +56,7 @@ public:
     {
         bool should_fallback_to_ap = false;
         bool should_restart_sta    = false;
+        bool should_sync_sntp      = false;
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
             const uint32_t now = millis();
@@ -65,6 +66,10 @@ public:
             should_restart_sta = _restart_station_requested && _wifi_enabled && !_badge_active;
             if (should_restart_sta) {
                 _restart_station_requested = false;
+            }
+            should_sync_sntp = _sntp_sync_requested && _wifi_enabled && _status.connected;
+            if (should_sync_sntp) {
+                _sntp_sync_requested = false;
             }
         }
 
@@ -76,6 +81,10 @@ public:
 
         if (should_restart_sta) {
             start_station_or_config_ap("Configuration saved");
+        }
+
+        if (should_sync_sntp) {
+            GetHAL().sntp_sync();
         }
     }
 
@@ -302,6 +311,7 @@ private:
     {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         _station_deadline_ms = 0;
+        _sntp_sync_requested = false;
         _status.enabled      = _wifi_enabled;
         _status.mode         = Hal::WifiMode::Off;
         _status.connected    = false;
@@ -345,10 +355,11 @@ private:
                 _status.ssid            = data.empty() ? wifi.GetSsid() : data;
                 _status.ipAddress       = wifi.GetIpAddress();
                 _status.message         = "Connected";
-                GetHAL().sntp_sync();
+                _sntp_sync_requested    = true;
             }
             break;
         case WifiEvent::Disconnected:
+            _sntp_sync_requested = false;
             if (_wifi_enabled && _status.mode == Hal::WifiMode::Connected) {
                 _status.mode      = Hal::WifiMode::Connecting;
                 _status.connected = false;
@@ -357,6 +368,7 @@ private:
             }
             break;
         case WifiEvent::ConfigModeEnter:
+            _sntp_sync_requested = false;
             if (_wifi_enabled) {
                 auto& wifi        = WifiManager::GetInstance();
                 _status.mode      = Hal::WifiMode::ConfigAp;
@@ -389,6 +401,7 @@ private:
     bool _wifi_enabled               = false;
     bool _badge_active               = false;
     bool _restart_station_requested  = false;
+    bool _sntp_sync_requested        = false;
     uint32_t _station_deadline_ms    = 0;
     Hal::WifiStatus _status;
 
