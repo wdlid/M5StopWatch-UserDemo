@@ -161,6 +161,14 @@ public:
     void setPowerLed(bool enabled);
 
     /* --------------------------------- Display -------------------------------- */
+    enum class ColorTemp : uint8_t {
+        Cool     = 0,  // 原生冷白
+        SoftWarm = 1,  // 柔和暖白
+        Warm     = 2,  // 护眼暖色
+    };
+
+    void setColorTemperature(ColorTemp temp, bool saveToSettings = false);
+    ColorTemp getColorTemperature(bool loadFromSettings = false);
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
     int getBackLightBrightness(bool loadFromSettings = false);
     void setScreenTimeout(uint32_t seconds, bool saveToSettings = true);

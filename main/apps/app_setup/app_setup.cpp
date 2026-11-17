@@ -50,6 +50,11 @@ void AppSetup::onOpen()
                      _destroy_menu = true;
                      _worker       = std::make_unique<ScreenTimeoutWorker>();
                  }},
+                {"Color Temp",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<ColorTempWorker>();
+                 }},
                 {"Volume",
                  [&]() {
                      _destroy_menu = true;

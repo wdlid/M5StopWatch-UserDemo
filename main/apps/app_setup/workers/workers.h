@@ -72,6 +72,24 @@ private:
  * @brief
  *
  */
+class ColorTempWorker : public WorkerBase {
+public:
+    ColorTempWorker();
+    ~ColorTempWorker();
+    void update() override;
+
+private:
+    class ColorTempView;
+    std::unique_ptr<ColorTempView> _view;
+    Hal::ColorTemp _applied_temp = Hal::ColorTemp::Cool;
+    Hal::ColorTemp _initial_temp = Hal::ColorTemp::Cool;
+    bool _saved                  = false;
+};
+
+/**
+ * @brief
+ *
+ */
 class VolumeWorker : public WorkerBase {
 public:
     VolumeWorker();

@@ -11,6 +11,7 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <memory>
+#include <atomic>
 #include <driver/gpio.h>
 #include <esp_timer.h>
 
@@ -163,6 +164,79 @@ public:
 static std::unique_ptr<M5StopWatch> _display;
 static std::unique_ptr<LGFX_Sprite> _canvas;
 
+static bool _screen_sleeping        = false;
+static uint32_t _screen_timeout_sec = 30;
+static uint32_t _last_activity_time = 0;
+
+static std::atomic<Hal::ColorTemp> _color_temp = Hal::ColorTemp::Cool;
+static uint16_t _lut_r[32];
+static uint16_t _lut_g[64];
+static uint16_t _lut_b[32];
+
+static void update_color_temp_lut(Hal::ColorTemp temp)
+{
+    if (temp == Hal::ColorTemp::Cool) {
+        _color_temp.store(temp, std::memory_order_release);
+        return;
+    }
+
+    // R: 5 bits (0..31), bit 11..15
+    for (int i = 0; i < 32; ++i) {
+        _lut_r[i] = (uint16_t)(i << 11);
+    }
+
+    if (temp == Hal::ColorTemp::SoftWarm) {
+        // Soft Warm: G roughly 98% (63 -> 62)
+        for (int i = 0; i < 64; ++i) {
+            uint16_t g = (uint16_t)((i * 62 + 31) / 63);
+            _lut_g[i]  = (uint16_t)(g << 5);
+        }
+        // Soft Warm: B roughly 87% (31 -> 27)
+        for (int i = 0; i < 32; ++i) {
+            uint16_t b = (uint16_t)((i * 27 + 15) / 31);
+            _lut_b[i]  = b;
+        }
+    } else {  // Warm
+        // Warm: G roughly 94% (63 -> 59)
+        for (int i = 0; i < 64; ++i) {
+            uint16_t g = (uint16_t)((i * 59 + 31) / 63);
+            _lut_g[i]  = (uint16_t)(g << 5);
+        }
+        // Warm: B roughly 74% (31 -> 23)
+        for (int i = 0; i < 32; ++i) {
+            uint16_t b = (uint16_t)((i * 23 + 15) / 31);
+            _lut_b[i]  = b;
+        }
+    }
+
+    _color_temp.store(temp, std::memory_order_release);
+}
+
+void Hal::setColorTemperature(ColorTemp temp, bool saveToSettings)
+{
+    update_color_temp_lut(temp);
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("color_temp", static_cast<int>(temp));
+        mclog::tagInfo(_tag, "color temp saved to settings: {}", static_cast<int>(temp));
+    }
+}
+
+Hal::ColorTemp Hal::getColorTemperature(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        int temp_val = settings.GetInt("color_temp", 0);
+        if (temp_val < 0 || temp_val > 2) {
+            temp_val = 0;
+        }
+        update_color_temp_lut(static_cast<ColorTemp>(temp_val));
+        mclog::tagInfo(_tag, "color temp loaded from settings: {}", temp_val);
+    }
+    return _color_temp.load(std::memory_order_acquire);
+}
+
 void Hal::display_init()
 {
     mclog::tagInfo(_tag, "display init");
@@ -189,6 +263,9 @@ void Hal::display_init()
     auto brightness = getBackLightBrightness(true);
     setBackLightBrightness(brightness, false);
 
+    // Load color temperature from settings
+    getColorTemperature(true);
+
     getScreenTimeout(true);
     _last_activity_time = millis();
 }
@@ -207,10 +284,6 @@ void Hal::updateCanvas()
 {
     _canvas->pushSprite(0, 0);
 }
-
-static bool _screen_sleeping        = false;
-static uint32_t _screen_timeout_sec = 30;
-static uint32_t _last_activity_time = 0;
 
 void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
 {
@@ -408,6 +481,15 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     uint32_t h      = (area->y2 - area->y1 + 1);
     uint32_t pixels = w * h;
 
+    auto cur_temp = _color_temp.load(std::memory_order_acquire);
+    if (cur_temp != Hal::ColorTemp::Cool) {
+        uint16_t *buf = (uint16_t *)px_map;
+        for (uint32_t i = 0; i < pixels; ++i) {
+            uint16_t c = buf[i];
+            buf[i]     = _lut_r[(c >> 11) & 0x1F] | _lut_g[(c >> 5) & 0x3F] | _lut_b[c & 0x1F];
+        }
+    }
+
     gfx.startWrite();
     gfx.setAddrWindow(area->x1, area->y1, w, h);
 
@@ -444,8 +526,7 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
 static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    M5GFX &gfx = *(M5GFX *)lv_indev_get_driver_data(indev);
-
+    (void)indev;
     auto tp = GetHAL().getTouchPoint();
     if (tp.num == 0) {
         data->state = LV_INDEV_STATE_REL;

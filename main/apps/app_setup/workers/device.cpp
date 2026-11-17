@@ -530,6 +530,127 @@ ScreenTimeoutWorker::~ScreenTimeoutWorker()
 {
 }
 
+class ColorTempWorker::ColorTempView {
+public:
+    explicit ColorTempView(Hal::ColorTemp initialTemp)
+    {
+        _selected_temp = initialTemp;
+
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _title_label = std::make_unique<Label>(_panel->get());
+        _title_label->align(LV_ALIGN_TOP_MID, 0, 54);
+        _title_label->setTextFont(&MontserratSemiBold26);
+        _title_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _title_label->setText("Color Temp");
+
+        _roller = std::make_unique<Roller>(_panel->get());
+        _roller->align(LV_ALIGN_CENTER, 0, -8);
+        _roller->setSize(280, 200);
+        _roller->setOptions("Cool (Native)\nSoft Warm\nWarm", LV_ROLLER_MODE_NORMAL);
+        _roller->setVisibleRowCount(3);
+
+        lv_obj_set_style_radius(_roller->get(), 52, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_roller->get(), lv_color_hex(0x343434), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(_roller->get(), LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(_roller->get(), 0, LV_PART_MAIN);
+        lv_obj_set_style_text_font(_roller->get(), &lv_font_montserrat_28, LV_PART_MAIN);
+        lv_obj_set_style_text_color(_roller->get(), lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+        lv_obj_set_style_text_align(_roller->get(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_pad_ver(_roller->get(), 24, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_roller->get(), lv_color_hex(0x4AD78C), LV_PART_SELECTED);
+        lv_obj_set_style_bg_opa(_roller->get(), LV_OPA_COVER, LV_PART_SELECTED);
+        lv_obj_set_style_text_font(_roller->get(), &lv_font_montserrat_28, LV_PART_SELECTED);
+        lv_obj_set_style_text_color(_roller->get(), lv_color_hex(0x0F5831), LV_PART_SELECTED);
+        lv_obj_set_style_text_align(_roller->get(), LV_TEXT_ALIGN_CENTER, LV_PART_SELECTED);
+        lv_obj_set_style_border_width(_roller->get(), 0, LV_PART_SELECTED);
+
+        uint32_t sel_idx = static_cast<uint32_t>(initialTemp);
+        if (sel_idx > 2) {
+            sel_idx = 0;
+        }
+
+        _roller->setSelected(sel_idx, LV_ANIM_OFF);
+        _roller->onValueChanged().connect([this](uint32_t index) {
+            if (index <= 2) {
+                _selected_temp = static_cast<Hal::ColorTemp>(index);
+            }
+        });
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    Hal::ColorTemp selectedColorTemp() const
+    {
+        return _selected_temp;
+    }
+
+    bool consumeSaveRequested()
+    {
+        bool req        = _save_requested;
+        _save_requested = false;
+        return req;
+    }
+
+private:
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Label> _title_label;
+    std::unique_ptr<Roller> _roller;
+    std::unique_ptr<Button> _ok_button;
+    Hal::ColorTemp _selected_temp = Hal::ColorTemp::Cool;
+    bool _save_requested          = false;
+};
+
+ColorTempWorker::ColorTempWorker()
+{
+    mclog::tagInfo(_tag, "start color temp worker");
+    _applied_temp = GetHAL().getColorTemperature();
+    _initial_temp = _applied_temp;
+    _view         = std::make_unique<ColorTempView>(_applied_temp);
+}
+
+void ColorTempWorker::update()
+{
+    if (_view && _applied_temp != _view->selectedColorTemp()) {
+        GetHAL().setColorTemperature(_view->selectedColorTemp(), false);
+        _applied_temp = _view->selectedColorTemp();
+        lv_obj_invalidate(lv_screen_active());
+    }
+
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setColorTemperature(_view->selectedColorTemp(), true);
+        _saved   = true;
+        _is_done = true;
+    }
+}
+
+ColorTempWorker::~ColorTempWorker()
+{
+    if (!_saved) {
+        GetHAL().setColorTemperature(_initial_temp, false);
+        lv_obj_invalidate(lv_screen_active());
+    }
+}
+
 VolumeWorker::VolumeWorker()
 {
     mclog::tagInfo(_tag, "start volume worker");
