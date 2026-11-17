@@ -30,13 +30,13 @@
         "branch": "v9.5.0"
     },
     {
-        "url": "https://github.com/m5stack/M5IOE1",
+        "url": "https://github.com/m5stack/M5IOE1.git",
         "path": "components/M5IOE1",
         "branch": "1.0.8",
         "patch": "patches/M5IOE1.patch"
     },
     {
-        "url": "https://github.com/m5stack/M5PM1",
+        "url": "https://github.com/m5stack/M5PM1.git",
         "path": "components/M5PM1",
         "branch": "1.0.6",
         "patch": "patches/M5PM1.patch"

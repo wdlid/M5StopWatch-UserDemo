@@ -109,7 +109,13 @@ def ensure_component(
         "origin",
     )
 
-    if configured_origin != repository:
+    def clean_url(u):
+        u = u.strip().rstrip("/")
+        if u.endswith(".git"):
+            u = u[:-4]
+        return u
+
+    if clean_url(configured_origin) != clean_url(repository):
         raise RuntimeError(
             f"Dependency '{name}' has unexpected origin:\n"
             f"  expected: {repository}\n"

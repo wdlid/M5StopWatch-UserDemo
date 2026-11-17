@@ -46,7 +46,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -62,10 +61,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install platformio esptool
-
-      - name: Fetch component dependencies
-        run: |
-          python3 ./fetch_repos.py
 
       - name: Build firmware with PlatformIO
         run: |
@@ -121,18 +116,25 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.build_toolchain == 'all' || inputs.build_toolchain == 'esp-idf'
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Configure safe directory for Git
+        run: git config --global --add safe.directory '*'
+
       - name: Fetch component dependencies
         run: |
+          . $IDF_PATH/export.sh
           python3 ./fetch_repos.py
 
       - name: Build firmware with ESP-IDF
         run: |
-          idf.py set-target esp32s3
+          . $IDF_PATH/export.sh
           idf.py build
 
       - name: Prepare ESP-IDF artifacts
