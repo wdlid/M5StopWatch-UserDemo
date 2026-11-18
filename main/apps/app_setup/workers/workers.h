@@ -260,6 +260,7 @@ private:
     std::unique_ptr<CheckUpdateView> _view;
 
     enum class Step {
+        None,
         CheckingWifi,
         CheckingGithub,
         WifiNotConnected,
@@ -281,12 +282,14 @@ private:
         size_t totalBytes    = 0;
     };
 
-    Step _step = Step::CheckingWifi;
+    Step _step               = Step::CheckingWifi;
+    Step _last_rendered_step = Step::None;
     UpdateInfo _info;
     std::mutex _mutex;
 
     std::atomic<bool> _abort_requested{false};
     std::atomic<bool> _task_running{false};
+    std::atomic<void*> _http_client{nullptr};
     TaskHandle_t _task_handle = nullptr;
 
     uint32_t _created_at = 0;

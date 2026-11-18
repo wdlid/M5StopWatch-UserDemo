@@ -607,8 +607,9 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
         }
     }
 
-    // Parse transcripts and turn flags if message is reasonably sized
-    if (jsonText.size() < 16384) {
+    // Parse transcripts and turn flags only if relevant keys exist to save CPU & avoid PSRAM churn
+    const bool has_server_content = (jsonText.find("\"serverContent\"") != std::string::npos);
+    if (has_server_content && jsonText.size() < 16384) {
         JsonDocument doc;
         if (deserializeJson(doc, jsonText) == DeserializationError::Ok) {
             JsonObject sc = doc["serverContent"].as<JsonObject>();

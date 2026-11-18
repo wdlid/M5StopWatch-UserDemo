@@ -350,8 +350,12 @@ CheckUpdateWorker::~CheckUpdateWorker()
 void CheckUpdateWorker::_stopTask()
 {
     _abort_requested = true;
+    auto client = static_cast<esp_http_client_handle_t>(_http_client.load());
+    if (client) {
+        esp_http_client_cancel_request(client);
+    }
     while (_task_running) {
-        vTaskDelay(pdMS_TO_TICKS(40));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
     _task_handle = nullptr;
 }
@@ -367,12 +371,13 @@ void CheckUpdateWorker::_startCheckTask()
 
             HttpRespBuf resp;
             esp_http_client_config_t config = {};
-            config.url                      = GITHUB_RELEASES_URL;
+            config.url                      = GITHUB_LATEST_URL;
             config.method                   = HTTP_METHOD_GET;
             config.crt_bundle_attach        = esp_crt_bundle_attach;
-            config.timeout_ms               = 10000;
+            config.timeout_ms               = 8000;
             config.buffer_size              = 4096;
             config.buffer_size_tx           = 1024;
+            config.max_redirection_count    = 5;
             config.event_handler            = http_event_cb;
             config.user_data                = &resp;
 
@@ -386,23 +391,27 @@ void CheckUpdateWorker::_startCheckTask()
                 return;
             }
 
+            self->_http_client.store(client);
             esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
             esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
 
             esp_err_t err = esp_http_client_perform(client);
             int status    = esp_http_client_get_status_code(client);
+            self->_http_client.store(nullptr);
             esp_http_client_cleanup(client);
 
-            // If /releases failed, fallback to /releases/latest
-            if ((err != ESP_OK || status != 200 || resp.body.empty()) && !self->_abort_requested) {
+            // If /releases/latest returned 404 (e.g. only prereleases exist), fallback to /releases
+            if (err == ESP_OK && status == 404 && !self->_abort_requested) {
                 resp.body.clear();
-                config.url = GITHUB_LATEST_URL;
+                config.url = GITHUB_RELEASES_URL;
                 client     = esp_http_client_init(&config);
                 if (client) {
+                    self->_http_client.store(client);
                     esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
                     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
                     err    = esp_http_client_perform(client);
                     status = esp_http_client_get_status_code(client);
+                    self->_http_client.store(nullptr);
                     esp_http_client_cleanup(client);
                 }
             }
@@ -417,7 +426,11 @@ void CheckUpdateWorker::_startCheckTask()
                 std::lock_guard<std::mutex> lk(self->_mutex);
                 self->_step = Step::CheckFailed;
                 char err_buf[64];
-                snprintf(err_buf, sizeof(err_buf), "Network error (HTTP %d)", status);
+                if (err != ESP_OK) {
+                    snprintf(err_buf, sizeof(err_buf), "Network error (%s)", esp_err_to_name(err));
+                } else {
+                    snprintf(err_buf, sizeof(err_buf), "Server error (HTTP %d)", status);
+                }
                 self->_info.errorMsg = err_buf;
                 self->_task_running  = false;
                 vTaskDelete(NULL);
@@ -488,7 +501,7 @@ void CheckUpdateWorker::_startCheckTask()
             self->_task_running = false;
             vTaskDelete(NULL);
         },
-        "check_update_task", 12 * 1024, this, 5, &_task_handle);
+        "check_update_task", 16 * 1024, this, 5, &_task_handle);
 }
 
 void CheckUpdateWorker::_startOtaTask()
@@ -517,6 +530,8 @@ void CheckUpdateWorker::_startOtaTask()
             http_config.keep_alive_enable        = true;
             http_config.buffer_size              = 4096;
             http_config.buffer_size_tx           = 2048;
+            http_config.max_redirection_count    = 5;
+            http_config.user_agent               = "M5StopWatch";
 
             esp_https_ota_config_t ota_config = {};
             ota_config.http_config            = &http_config;
@@ -594,25 +609,80 @@ void CheckUpdateWorker::_startOtaTask()
             self->_task_running = false;
             vTaskDelete(NULL);
         },
-        "ota_download_task", 12 * 1024, this, 5, &_task_handle);
+        "ota_download_task", 16 * 1024, this, 5, &_task_handle);
 }
 
 void CheckUpdateWorker::update()
 {
     if (!_view) return;
 
-    switch (_step) {
+    Step current_step;
+    UpdateInfo info;
+    {
+        std::lock_guard<std::mutex> lk(_mutex);
+        current_step = _step;
+        info         = _info;
+    }
+
+    if (current_step != _last_rendered_step) {
+        _last_rendered_step = current_step;
+        switch (current_step) {
+        case Step::CheckingGithub:
+            _view->setInfo("Checking for updates...", "Connecting to GitHub...");
+            _view->showSingleButton("Cancel");
+            break;
+        case Step::WifiNotConnected:
+            _view->setInfo("Wi-Fi Not Connected", "Please connect to Wi-Fi\nin Settings first");
+            _view->showSingleButton("Back");
+            break;
+        case Step::UpToDate:
+            _view->setInfo("Your firmware is up to date!", fmt::format("Version: {}", common::FirmwareVersion));
+            _view->showSingleButton("OK");
+            break;
+        case Step::CheckFailed:
+            _view->setInfo("Check Failed", info.errorMsg);
+            _view->showSingleButton("Back");
+            break;
+        case Step::UpdateAvailable:
+            _view->setInfo("New Version Available!",
+                           fmt::format("{} ({})", info.latestVersion, format_bytes(info.fileSize)));
+            _view->showActionButtons("Later", "Update");
+            break;
+        case Step::Downloading:
+            _view->setInfo("Downloading Update...", "Please do not turn off watch");
+            _view->showProgressBar(true);
+            _view->hideAllButtons();
+            break;
+        case Step::UpdateSuccess:
+            _view->setInfo("Update Complete!", "Rebooting into new version...");
+            _view->setProgress(100, info.totalBytes, info.totalBytes);
+            _view->hideAllButtons();
+            if (_reboot_at == 0) {
+                _reboot_at = GetHAL().millis() + 2000;
+            }
+            break;
+        case Step::UpdateFailed:
+            _view->setInfo("Update Failed", info.errorMsg);
+            _view->showProgressBar(false);
+            _view->showSingleButton("Back");
+            break;
+        default:
+            break;
+        }
+    }
+
+    switch (current_step) {
     case Step::CheckingWifi: {
         auto wifiStatus = GetHAL().getWifiStatus();
         if (wifiStatus.connected && !wifiStatus.ipAddress.empty()) {
-            _step = Step::CheckingGithub;
-            _view->setInfo("Checking for updates...", "Connecting to GitHub...");
-            _view->showSingleButton("Cancel");
+            {
+                std::lock_guard<std::mutex> lk(_mutex);
+                _step = Step::CheckingGithub;
+            }
             _startCheckTask();
         } else {
+            std::lock_guard<std::mutex> lk(_mutex);
             _step = Step::WifiNotConnected;
-            _view->setInfo("Wi-Fi Not Connected", "Please connect to Wi-Fi\nin Settings first");
-            _view->showSingleButton("Back");
         }
         break;
     }
@@ -622,19 +692,6 @@ void CheckUpdateWorker::update()
             _stopTask();
             _is_done = true;
             return;
-        }
-
-        std::lock_guard<std::mutex> lk(_mutex);
-        if (_step == Step::UpToDate) {
-            _view->setInfo("Your firmware is up to date!", fmt::format("Version: {}", common::FirmwareVersion));
-            _view->showSingleButton("OK");
-        } else if (_step == Step::CheckFailed) {
-            _view->setInfo("Check Failed", _info.errorMsg);
-            _view->showSingleButton("Back");
-        } else if (_step == Step::UpdateAvailable) {
-            _view->setInfo("New Version Available!",
-                           fmt::format("{} ({})", _info.latestVersion, format_bytes(_info.fileSize)));
-            _view->showActionButtons("Later", "Update");
         }
         break;
     }
@@ -649,46 +706,20 @@ void CheckUpdateWorker::update()
     }
 
     case Step::UpdateAvailable: {
-        if (_view->consumeLaterClicked() || GetHAL().btnA.wasClicked()) {
+        if (_view->consumeLaterClicked() || _view->consumeCenterClicked() || GetHAL().btnA.wasClicked()) {
             _is_done = true;
         } else if (_view->consumeUpdateClicked() || GetHAL().btnB.wasClicked()) {
-            _step = Step::Downloading;
-            _view->setInfo("Downloading Update...", "Please do not turn off watch");
-            _view->showProgressBar(true);
-            _view->hideAllButtons();
+            {
+                std::lock_guard<std::mutex> lk(_mutex);
+                _step = Step::Downloading;
+            }
             _startOtaTask();
         }
         break;
     }
 
     case Step::Downloading: {
-        int progress         = 0;
-        size_t received_bytes = 0;
-        size_t total_bytes    = 0;
-        Step current_step     = Step::Downloading;
-
-        {
-            std::lock_guard<std::mutex> lk(_mutex);
-            progress       = _info.progress;
-            received_bytes = _info.bytesReceived;
-            total_bytes    = _info.totalBytes;
-            current_step   = _step;
-        }
-
-        _view->setProgress(progress, received_bytes, total_bytes);
-
-        if (current_step == Step::UpdateSuccess) {
-            _step = Step::UpdateSuccess;
-            _view->setInfo("Update Complete!", "Rebooting into new version...");
-            _view->setProgress(100, total_bytes, total_bytes);
-            _view->hideAllButtons();
-            _reboot_at = GetHAL().millis() + 2000;
-        } else if (current_step == Step::UpdateFailed) {
-            _step = Step::UpdateFailed;
-            _view->setInfo("Update Failed", _info.errorMsg);
-            _view->showProgressBar(false);
-            _view->showSingleButton("Back");
-        }
+        _view->setProgress(info.progress, info.bytesReceived, info.totalBytes);
         break;
     }
 
@@ -706,5 +737,8 @@ void CheckUpdateWorker::update()
         }
         break;
     }
+
+    default:
+        break;
     }
 }

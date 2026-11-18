@@ -12,6 +12,7 @@ LV_FONT_DECLARE(CommissionerMedium108);
 LV_FONT_DECLARE(lv_font_maple_mono_medium_24);
 LV_FONT_DECLARE(lv_font_maple_mono_medium_28);
 LV_FONT_DECLARE(lv_font_maple_mono_medium_48);
+LV_FONT_DECLARE(lv_font_misans_18);
 
 LV_IMG_DECLARE(icon_indicator_left);
 LV_IMG_DECLARE(icon_indicator_right);

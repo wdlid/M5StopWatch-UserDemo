@@ -120,16 +120,16 @@ void GeminiView::init(lv_obj_t* parent)
 
     // Minimal floating status indicator at top
     _status_label = std::make_unique<Label>(_panel->get());
-    _status_label->setTextFont(&lv_font_montserrat_16);
+    _status_label->setTextFont(&lv_font_misans_18);
     _status_label->setTextColor(lv_color_hex(0x94A3B8));
-    _status_label->setWidth(360);
+    _status_label->setWidth(380);
     _status_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _status_label->setText("Connecting...");
     _status_label->align(LV_ALIGN_TOP_MID, 0, 36);
 
     // Subtitle transcript at bottom (no buttons!)
     _transcript_label = std::make_unique<Label>(_panel->get());
-    _transcript_label->setTextFont(&lv_font_montserrat_18);
+    _transcript_label->setTextFont(&lv_font_misans_18);
     _transcript_label->setTextColor(lv_color_hex(0xE2E8F0));
     _transcript_label->setWidth(380);
     _transcript_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
@@ -156,7 +156,7 @@ void GeminiView::init(lv_obj_t* parent)
     _web_title->align(LV_ALIGN_TOP_MID, 0, 16);
 
     _web_info = std::make_unique<Label>(_web_box->get());
-    _web_info->setTextFont(&lv_font_montserrat_18);
+    _web_info->setTextFont(&lv_font_misans_18);
     _web_info->setTextColor(lv_color_hex(0xF1F5F9));
     _web_info->setWidth(320);
     _web_info->setTextAlign(LV_TEXT_ALIGN_CENTER);
