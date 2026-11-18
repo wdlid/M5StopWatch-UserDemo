@@ -478,6 +478,11 @@ bool Hal::isWifiEnabled(bool loadFromSettings)
     return get_network_controller().is_enabled(loadFromSettings);
 }
 
+bool Hal::isWifiConnected()
+{
+    return get_network_controller().status().connected;
+}
+
 Hal::WifiStatus Hal::getWifiStatus()
 {
     return get_network_controller().status();

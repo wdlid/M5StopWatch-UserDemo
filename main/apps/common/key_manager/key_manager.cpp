@@ -15,7 +15,7 @@ const KeyEvent& KeyManager::update(bool updateButtonStates)
 
     _event = KeyEvent::None;
 
-    if (GetHAL().btnA.isHolding() && GetHAL().btnB.isHolding()) {
+    if (GetHAL().btnA.isHolding()) {
         if (!_go_home_latched) {
             _event           = KeyEvent::GoHome;
             _go_home_latched = true;
@@ -24,7 +24,9 @@ const KeyEvent& KeyManager::update(bool updateButtonStates)
         _event = KeyEvent::GoPrevious;
     } else if (GetHAL().btnB.wasClicked()) {
         _event = KeyEvent::GoNext;
-    } else if (GetHAL().btnA.isReleased() && GetHAL().btnB.isReleased()) {
+    }
+
+    if (GetHAL().btnA.isReleased()) {
         _go_home_latched = false;
     }
 

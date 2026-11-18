@@ -76,24 +76,33 @@ void AppGemini::toggleWebConfig()
 
 void AppGemini::onRunning()
 {
-    // GoHome: KeyManager GoHome event OR simultaneous press of Button A + Button B
-    const bool dual_pressed = GetHAL().btnA.isPressed() && GetHAL().btnB.isPressed();
-    if ((_key_manager && _key_manager->update() == input::KeyEvent::GoHome) || dual_pressed) {
+    // Auto-close when screen sleeps if idle to save power and prevent background network teardown crashes
+    if (GetHAL().isScreenSleeping() && !_is_talking_active && !GetHAL().isAudioPlaying()) {
+        const bool web_active = _web_server && _web_server->isRunning();
+        if (!web_active) {
+            close();
+            return;
+        }
+    }
+
+    // GoHome: KeyManager GoHome event (Hold Button A to return home)
+    if (_key_manager && _key_manager->update() == input::KeyEvent::GoHome) {
         close();
         return;
     }
 
-    // Button B click: Toggle Web Config AP mode
-    if (GetHAL().btnB.wasClicked() && !GetHAL().btnA.isPressed()) {
+    // Button A click: Toggle Web Config AP mode (or Button B click if Web Config is already active)
+    const bool web_active = _web_server && _web_server->isRunning();
+    if ((GetHAL().btnA.wasClicked() || (web_active && GetHAL().btnB.wasClicked())) && !GetHAL().btnA.isHolding()) {
         toggleWebConfig();
         return;
     }
 
-    // Hold Button A OR hold the center pattern to talk
-    if (_client && (!_web_server || !_web_server->isRunning())) {
-        const bool btn_a_pressed = GetHAL().btnA.isPressed() && !GetHAL().btnB.isPressed();
+    // Hold Button B OR hold the center pattern to talk
+    if (_client && !web_active) {
+        const bool btn_b_pressed = GetHAL().btnB.isPressed() && !GetHAL().btnA.isPressed();
         const bool pattern_held  = _view && _view->isPatternPressed();
-        const bool should_talk   = btn_a_pressed || pattern_held;
+        const bool should_talk   = btn_b_pressed || pattern_held;
 
         if (should_talk) {
             if (!_is_talking_active) {

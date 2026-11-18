@@ -12,7 +12,7 @@
 #include <string_view>
 #include <cstdint>
 #include <memory>
-#include <array>
+#include <vector>
 
 namespace view {
 
@@ -20,6 +20,7 @@ class ArcTopClock : public uitk::lvgl_cpp::Widget<lv_obj_create> {
 public:
     using Widget::Widget;
 
+    bool showFullDate       = false;
     uint32_t color          = 0xFFFFFF;
     uint32_t updateInterval = 1000;
     int displayRadius       = 233;
@@ -28,7 +29,7 @@ public:
     void update(bool force = false);
 
 protected:
-    std::array<std::unique_ptr<uitk::lvgl_cpp::Label>, 5> labels;
+    std::vector<std::unique_ptr<uitk::lvgl_cpp::Label>> labels;
     uint32_t update_time_count = 0;
 
     void set_clock_to(const std::string_view text);

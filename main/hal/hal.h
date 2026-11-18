@@ -304,6 +304,7 @@ public:
 
     void setWifiEnabled(bool enabled, bool saveToSettings = true);
     bool isWifiEnabled(bool loadFromSettings = false);
+    bool isWifiConnected();
     WifiStatus getWifiStatus();
     void wifi_enter_badge_ap();
     void wifi_exit_badge_ap();

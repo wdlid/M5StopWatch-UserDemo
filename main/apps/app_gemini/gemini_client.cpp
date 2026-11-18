@@ -658,12 +658,16 @@ void GeminiLiveClient::taskLoop()
     mclog::tagInfo(_tag, "GeminiLive task started");
 
     while (_running.load()) {
-        // Ensure Wi-Fi is connected
+        // Ensure Wi-Fi is connected and screen is awake
         auto wifi = GetHAL().getWifiStatus();
-        if (!wifi.connected) {
+        if (!wifi.connected || GetHAL().isScreenSleeping()) {
             _state = SessionState::Error;
-            setStatusText(wifi.enabled ? "Waiting for Wi-Fi..." : "Wi-Fi is Off (Enable in Settings)");
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            if (GetHAL().isScreenSleeping()) {
+                setStatusText("Standby (Screen Asleep)");
+            } else {
+                setStatusText(wifi.enabled ? "Waiting for Wi-Fi..." : "Wi-Fi is Off (Enable in Settings)");
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
@@ -687,6 +691,9 @@ void GeminiLiveClient::taskLoop()
                 _state = SessionState::Error;
                 setStatusText("Connect failed: " + err_msg);
                 for (int i = 0; i < 30 && _running.load(); ++i) {
+                    if (GetHAL().isScreenSleeping() || !GetHAL().isWifiConnected()) {
+                        break;
+                    }
                     vTaskDelay(pdMS_TO_TICKS(100));
                 }
                 continue;

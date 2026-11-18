@@ -320,8 +320,9 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     /* ---------------------------------- Clock --------------------------------- */
     _clock = std::make_unique<view::ArcTopClock>(_panel->get());
+    _clock->showFullDate = true;
     _clock->init();
-    _clock->align(LV_ALIGN_TOP_MID, 0, 4);
+    _clock->align(LV_ALIGN_CENTER, 0, 0);
     _clock->addFlag(LV_OBJ_FLAG_FLOATING);
 
     /* ----------------------------- History restore ---------------------------- */

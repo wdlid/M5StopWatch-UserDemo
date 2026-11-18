@@ -134,7 +134,7 @@ void GeminiView::init(lv_obj_t* parent)
     _transcript_label->setWidth(380);
     _transcript_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _transcript_label->setLongMode(LV_LABEL_LONG_MODE_WRAP);
-    _transcript_label->setText("Hold Btn A or Pattern to talk");
+    _transcript_label->setText("Hold Btn B or Pattern to talk");
     _transcript_label->align(LV_ALIGN_BOTTOM_MID, 0, -32);
 
     // Web Config overlay card (only shown in Web Setup mode)
@@ -167,7 +167,7 @@ void GeminiView::init(lv_obj_t* parent)
     _web_hint = std::make_unique<Label>(_web_box->get());
     _web_hint->setTextFont(&lv_font_montserrat_14);
     _web_hint->setTextColor(lv_color_hex(0xA78BFA));
-    _web_hint->setText("Tap screen or press Btn B to exit");
+    _web_hint->setText("Tap screen or press Btn A to exit");
     _web_hint->align(LV_ALIGN_BOTTOM_MID, 0, -14);
 
     _pattern_touch->moveForeground();

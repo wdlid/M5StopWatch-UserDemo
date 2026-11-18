@@ -5,6 +5,7 @@
  */
 #include "ech_connector.h"
 
+#include <hal/hal.h>
 #include <mooncake_log.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
@@ -201,6 +202,9 @@ esp_err_t doh_http_event_handler(esp_http_client_event_t* evt)
 bool doh_query_single(const std::string& dohUrl, const std::string& domain, uint16_t qtype, DnsLookupResult& outResult)
 {
     if (dohUrl.empty()) return false;
+    if (!GetHAL().isWifiConnected() || GetHAL().isScreenSleeping()) {
+        return false;
+    }
     std::vector<uint8_t> query;
     if (!buildDnsQuery(domain, qtype, query)) {
         return false;
@@ -459,6 +463,9 @@ bool parseDnsResponse(const uint8_t* packet, std::size_t len, DnsLookupResult& o
 bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts, ResolvedEndpoint& outEndpoint)
 {
     outEndpoint = {};
+    if (!GetHAL().isWifiConnected() || GetHAL().isScreenSleeping()) {
+        return false;
+    }
     std::string host = targetHost;
     const bool is_google = is_google_direct_domain(host);
 
@@ -805,7 +812,7 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
 
     uint32_t start_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     while ((ret = mbedtls_ssl_handshake(&_ssl)) != 0) {
-        if (_abort.load()) {
+        if (_abort.load() || !GetHAL().isWifiConnected() || GetHAL().isScreenSleeping()) {
             outError = "TLS handshake aborted";
             return false;
         }
@@ -1070,9 +1077,12 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
             if (!performWsUpgrade(host, path_and_query, bearerToken, apiKeyHeader, outError)) {
                 mclog::tagWarn(_tag, "WS upgrade failed with {} (SNI={}): {}", ip, sni_name, outError);
                 disconnect();
-                // If 401 or 403, this is an auth rejection from server; retrying other IPs will not help
+                // If 401 or 403, check if this was with outer SNI (domain fronting)
                 if (outError.find("401") != std::string::npos || outError.find("403") != std::string::npos) {
-                    return false;
+                    if (sni_name == host) {
+                        return false;
+                    }
+                    // Outer SNI (domain fronting) was rejected by CDN/gateway; continue and try direct host SNI!
                 }
                 continue;
             }
