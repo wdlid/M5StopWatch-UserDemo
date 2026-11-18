@@ -42,6 +42,8 @@ void Hal::button_init()
 void Hal::pwr_button_tick()
 {
     static uint32_t _last_poll = 0;
+    static bool shutdown_triggered = false;
+
     const uint32_t now = millis();
     if (now - _last_poll < 20) {
         return;
@@ -56,6 +58,8 @@ void Hal::pwr_button_tick()
     if (btnPwr.wasPressed()) {
         if (isScreenSleeping()) {
             wakeScreen();
+            btnPwr.clearClickCount();
+            return;
         } else {
             resetActivityTimer();
         }
@@ -63,7 +67,6 @@ void Hal::pwr_button_tick()
 
     // Long press (>= 2.0s): Power off / 关机
     if (btnPwr.pressedFor(2000)) {
-        static bool shutdown_triggered = false;
         if (!shutdown_triggered) {
             shutdown_triggered = true;
             mclog::tagInfo(_tag, "power/boot button held 2s: power off");
@@ -73,25 +76,35 @@ void Hal::pwr_button_tick()
             if (config.vibrateEnabled) {
                 vibrate(200, 100);
             }
+
+            // Wait for user to release the button so it doesn't wake immediately
+            const uint32_t wait_start = millis();
+            while ((!gpio_get_level(BOOT_BUTTON_PIN) || pmic_get_pwr_btn_state()) && (millis() - wait_start < 2500)) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+
             powerOff();
         }
     } else {
-        // Double click: Toggle standby / 待机
-        bool double_clicked = btnPwr.wasDoubleClicked() ||
-                              (btnPwr.wasClicked() && btnPwr.getClickCount() >= 2) ||
+        if (!btnPwr.isPressed()) {
+            shutdown_triggered = false;
+        }
+
+        // Double click: Sleep screen / 熄屏
+        bool double_clicked = (btnPwr.wasClicked() && btnPwr.getClickCount() >= 2) ||
+                              btnPwr.wasDoubleClicked() ||
                               pmic_get_double_click_flag();
 
         if (double_clicked) {
-            mclog::tagInfo(_tag, "power/boot button double clicked: toggle standby");
-            if (config.sfxEnabled) {
-                audio::play_tone(1500, 0.04);
-            }
-            if (config.vibrateEnabled) {
-                vibrate(30, 80);
-            }
-            if (isScreenSleeping()) {
-                wakeScreen();
-            } else {
+            btnPwr.clearClickCount();
+            if (!isScreenSleeping() && (now - getLastWakeTime() > 800)) {
+                mclog::tagInfo(_tag, "power/boot button double clicked: sleep screen");
+                if (config.sfxEnabled) {
+                    audio::play_tone(1500, 0.04);
+                }
+                if (config.vibrateEnabled) {
+                    vibrate(30, 80);
+                }
                 sleepScreen();
             }
         }

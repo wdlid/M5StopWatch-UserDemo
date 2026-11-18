@@ -167,6 +167,7 @@ static std::unique_ptr<LGFX_Sprite> _canvas;
 static bool _screen_sleeping        = false;
 static uint32_t _screen_timeout_sec = 30;
 static uint32_t _last_activity_time = 0;
+static uint32_t _last_wake_time     = 0;
 
 static std::atomic<Hal::ColorTemp> _color_temp = Hal::ColorTemp::Cool;
 static uint16_t _lut_r[32];
@@ -346,6 +347,11 @@ bool Hal::isScreenSleeping() const
     return _screen_sleeping;
 }
 
+uint32_t Hal::getLastWakeTime() const
+{
+    return _last_wake_time;
+}
+
 void Hal::sleepScreen()
 {
     if (_screen_sleeping) {
@@ -364,6 +370,7 @@ void Hal::wakeScreen()
     }
     _screen_sleeping = false;
     _last_activity_time = millis();
+    _last_wake_time     = _last_activity_time;
     int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
     _display->setBrightness(set_target);
     setPowerLed(false);

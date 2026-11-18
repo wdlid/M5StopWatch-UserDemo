@@ -7,9 +7,14 @@
 #include <smooth_lvgl.hpp>
 #include <uitk/short_namespace.hpp>
 #include <hal/hal.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <string_view>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace setup_workers {
 
@@ -238,6 +243,58 @@ public:
 private:
     class OtaView;
     std::unique_ptr<OtaView> _view;
+};
+
+/**
+ * @brief Worker to check latest release from GitHub and perform OTA update
+ *
+ */
+class CheckUpdateWorker : public WorkerBase {
+public:
+    CheckUpdateWorker();
+    ~CheckUpdateWorker();
+    void update() override;
+
+private:
+    class CheckUpdateView;
+    std::unique_ptr<CheckUpdateView> _view;
+
+    enum class Step {
+        CheckingWifi,
+        CheckingGithub,
+        WifiNotConnected,
+        CheckFailed,
+        UpToDate,
+        UpdateAvailable,
+        Downloading,
+        UpdateSuccess,
+        UpdateFailed
+    };
+
+    struct UpdateInfo {
+        std::string latestVersion;
+        std::string downloadUrl;
+        size_t fileSize      = 0;
+        std::string errorMsg;
+        int progress         = 0;
+        size_t bytesReceived = 0;
+        size_t totalBytes    = 0;
+    };
+
+    Step _step = Step::CheckingWifi;
+    UpdateInfo _info;
+    std::mutex _mutex;
+
+    std::atomic<bool> _abort_requested{false};
+    std::atomic<bool> _task_running{false};
+    TaskHandle_t _task_handle = nullptr;
+
+    uint32_t _created_at = 0;
+    uint32_t _reboot_at  = 0;
+
+    void _startCheckTask();
+    void _startOtaTask();
+    void _stopTask();
 };
 
 }  // namespace setup_workers

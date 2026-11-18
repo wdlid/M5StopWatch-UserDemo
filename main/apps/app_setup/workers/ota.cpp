@@ -89,9 +89,9 @@ public:
 
         // Exit / Back button
         _btn = std::make_unique<Button>(_panel->get());
-        _btn->align(LV_ALIGN_CENTER, 0, 165);
-        _btn->setSize(280, 64);
-        _btn->setRadius(32);
+        _btn->align(LV_ALIGN_CENTER, 0, 150);
+        _btn->setSize(240, 56);
+        _btn->setRadius(28);
         _btn->setBorderWidth(0);
         _btn->setShadowWidth(0);
         _btn->setBgColor(lv_color_hex(0x334155));
@@ -101,7 +101,7 @@ public:
         _btn->label().align(LV_ALIGN_CENTER, 0, 0);
         _created_at = GetHAL().millis();
         _btn->onClick().connect([this]() {
-            if (GetHAL().millis() - _created_at >= 800) {
+            if (GetHAL().millis() - _created_at >= 400) {
                 _exit_requested = true;
             }
         });
@@ -109,7 +109,7 @@ public:
 
     void updateStatus(const Hal::OtaStatus& status)
     {
-        // Update connection instructions
+        // Update connection instructions only when text changed
         if (!status.ipAddress.empty()) {
             std::string info;
             if (!status.ssid.empty() && status.ssid.find("OTA") == std::string::npos) {
@@ -117,44 +117,55 @@ public:
             } else {
                 info = "Connect Wi-Fi:\n" + status.ssid + "\nhttp://" + status.ipAddress + "/ota";
             }
-            _info_label->setText(info);
+            if (info != _last_info) {
+                _last_info = info;
+                _info_label->setText(info);
+            }
         }
 
-        // Update progress bar
-        lv_bar_set_value(_bar_obj, status.progress, LV_ANIM_OFF);
+        // Update progress bar only when value changed
+        if (status.progress != _last_progress) {
+            _last_progress = status.progress;
+            lv_bar_set_value(_bar_obj, status.progress, LV_ANIM_OFF);
+        }
 
-        // Update state display
-        switch (status.state) {
-        case Hal::OtaState::Idle:
-        case Hal::OtaState::Ready:
-            _status_label->setTextColor(lv_color_hex(0x4AD78C));
-            _status_label->setText("Ready for firmware");
-            setButtonVisible(true);
-            break;
-        case Hal::OtaState::Flashing:
-            _status_label->setTextColor(lv_color_hex(0x38BDF8));
-            _status_label->setText("Flashing " + std::to_string(status.progress) + "% (" +
-                                  format_bytes(status.bytesReceived) + ")");
-            // Hide exit button to avoid disrupting flash write
-            setButtonVisible(false);
-            break;
-        case Hal::OtaState::Success:
-            _status_label->setTextColor(lv_color_hex(0x10B981));
-            _status_label->setText("Complete! Rebooting...");
-            setButtonVisible(false);
-            break;
-        case Hal::OtaState::Failed:
-            _status_label->setTextColor(lv_color_hex(0xF43F5E));
-            _status_label->setText("Failed: " + status.message);
-            setButtonVisible(true);
-            _btn->label().setText("Back");
-            break;
+        // Update state display only when state, progress or message changed
+        if (status.state != _last_state || status.bytesReceived != _last_bytes) {
+            _last_state = status.state;
+            _last_bytes = status.bytesReceived;
+
+            switch (status.state) {
+            case Hal::OtaState::Idle:
+            case Hal::OtaState::Ready:
+                _status_label->setTextColor(lv_color_hex(0x4AD78C));
+                _status_label->setText("Ready for firmware");
+                setButtonVisible(true);
+                break;
+            case Hal::OtaState::Flashing:
+                _status_label->setTextColor(lv_color_hex(0x38BDF8));
+                _status_label->setText("Flashing " + std::to_string(status.progress) + "% (" +
+                                      format_bytes(status.bytesReceived) + ")");
+                // Hide exit button to avoid disrupting flash write
+                setButtonVisible(false);
+                break;
+            case Hal::OtaState::Success:
+                _status_label->setTextColor(lv_color_hex(0x10B981));
+                _status_label->setText("Complete! Rebooting...");
+                setButtonVisible(false);
+                break;
+            case Hal::OtaState::Failed:
+                _status_label->setTextColor(lv_color_hex(0xF43F5E));
+                _status_label->setText("Failed: " + status.message);
+                setButtonVisible(true);
+                _btn->label().setText("Back");
+                break;
+            }
         }
     }
 
     bool consumeExitRequested()
     {
-        if (GetHAL().millis() - _created_at < 800) {
+        if (GetHAL().millis() - _created_at < 400) {
             _exit_requested = false;
             return false;
         }
@@ -165,7 +176,8 @@ public:
 
     void setButtonVisible(bool visible)
     {
-        if (_btn) {
+        if (_btn && _btn_visible != visible) {
+            _btn_visible = visible;
             if (visible) {
                 lv_obj_remove_flag(_btn->get(), LV_OBJ_FLAG_HIDDEN);
             } else {
@@ -183,6 +195,12 @@ private:
     std::unique_ptr<Button> _btn;
     uint32_t _created_at = 0;
     bool _exit_requested = false;
+
+    Hal::OtaState _last_state = Hal::OtaState::Idle;
+    int _last_progress = -1;
+    std::size_t _last_bytes = 0;
+    std::string _last_info;
+    bool _btn_visible = true;
 };
 
 OtaWorker::OtaWorker()
@@ -214,7 +232,7 @@ void OtaWorker::update()
 
     // Can only exit if not currently flashing
     if (status.state != Hal::OtaState::Flashing) {
-        if (_view->consumeExitRequested()) {
+        if (_view->consumeExitRequested() || GetHAL().btnA.wasClicked() || GetHAL().btnB.wasClicked()) {
             _is_done = true;
         }
     }

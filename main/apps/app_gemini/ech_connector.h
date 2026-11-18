@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <string>
@@ -65,6 +66,7 @@ public:
                  std::string& outError);
 
     void disconnect();
+    void abort();
     bool isConnected() const
     {
         return _connected;
@@ -104,6 +106,7 @@ private:
     int _sockfd     = -1;
     bool _connected = false;
     bool _is_tls    = true;
+    std::atomic<bool> _abort{false};
     std::string _connected_ip;
 
     mbedtls_ssl_context _ssl;

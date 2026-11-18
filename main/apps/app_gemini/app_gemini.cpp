@@ -25,10 +25,10 @@ void AppGemini::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
-    _key_manager        = std::make_unique<input::KeyManager>();
-    _client             = std::make_unique<gemini::GeminiLiveClient>();
-    _web_server         = std::make_unique<gemini::GeminiConfigServer>();
-    _btn_a_hold_talking = false;
+    _key_manager       = std::make_unique<input::KeyManager>();
+    _client            = std::make_unique<gemini::GeminiLiveClient>();
+    _web_server        = std::make_unique<gemini::GeminiConfigServer>();
+    _is_talking_active = false;
 
     // Ensure Wi-Fi is enabled when opening Gemini Live
     if (!GetHAL().isWifiEnabled()) {
@@ -40,16 +40,11 @@ void AppGemini::onOpen()
         _view = std::make_unique<view::GeminiView>();
         _view->init(lv_screen_active());
 
-        _view->onTalkButtonClicked = [this]() {
+        _view->onExitWebConfigClicked = [this]() {
             if (_web_server && _web_server->isRunning()) {
-                return;
-            }
-            if (_client) {
-                _client->togglePttTalking();
+                toggleWebConfig();
             }
         };
-
-        _view->onConfigButtonClicked = [this]() { toggleWebConfig(); };
     }
 
     auto cfg = gemini::GeminiConfig::loadFromNvs();
@@ -71,7 +66,7 @@ void AppGemini::toggleWebConfig()
         if (_web_server->start()) {
             LvglLockGuard lock;
             if (_view) {
-                _view->setStatusText("Web Config Active");
+                _view->setStatusText("Web Setup Mode");
                 _view->setTranscriptText(
                     "", "Wi-Fi: " + _web_server->ssid() + "\nOpen: " + _web_server->pageUrl());
             }
@@ -81,23 +76,37 @@ void AppGemini::toggleWebConfig()
 
 void AppGemini::onRunning()
 {
-    if (_key_manager && _key_manager->update() == input::KeyEvent::GoHome) {
+    // GoHome: KeyManager GoHome event OR simultaneous press of Button A + Button B
+    const bool dual_pressed = GetHAL().btnA.isPressed() && GetHAL().btnB.isPressed();
+    if ((_key_manager && _key_manager->update() == input::KeyEvent::GoHome) || dual_pressed) {
         close();
         return;
     }
 
-    // Physical Button A: Hold to Talk (when Button B is not held for GoHome)
+    // Button B click: Toggle Web Config AP mode
+    if (GetHAL().btnB.wasClicked() && !GetHAL().btnA.isPressed()) {
+        toggleWebConfig();
+        return;
+    }
+
+    // Hold Button A OR hold the center pattern to talk
     if (_client && (!_web_server || !_web_server->isRunning())) {
-        if (GetHAL().btnA.isHolding() && !GetHAL().btnB.isPressed()) {
-            if (!_btn_a_hold_talking) {
-                _btn_a_hold_talking = true;
+        const bool btn_a_pressed = GetHAL().btnA.isPressed() && !GetHAL().btnB.isPressed();
+        const bool pattern_held  = _view && _view->isPatternPressed();
+        const bool should_talk   = btn_a_pressed || pattern_held;
+
+        if (should_talk) {
+            if (!_is_talking_active) {
+                _is_talking_active = true;
+                GetHAL().vibrate(25, 70);
                 _client->setPttTalking(true);
             }
-        } else if (_btn_a_hold_talking && GetHAL().btnA.isReleased()) {
-            _btn_a_hold_talking = false;
-            _client->setPttTalking(false);
-        } else if (GetHAL().btnA.wasClicked() && !GetHAL().btnB.isPressed()) {
-            _client->togglePttTalking();
+        } else {
+            if (_is_talking_active) {
+                _is_talking_active = false;
+                GetHAL().vibrate(20, 60);
+                _client->setPttTalking(false);
+            }
         }
     }
 
@@ -108,8 +117,15 @@ void AppGemini::onRunning()
         _client->start(cfg);
     }
 
+    // Audio spectrum & volume updates
+    GetHAL().updateAudioSpectrum();
+    const auto spectrum = GetHAL().getAudioSpectrum();
+
     LvglLockGuard lock;
     if (_view) {
+        _view->setSpectrum(spectrum.bands);
+        _view->setPeakFrequencyHz(spectrum.peakFrequencyHz);
+
         const bool web_active = _web_server && _web_server->isRunning();
         if (web_active) {
             _view->setState(gemini::SessionState::Ready, false, true);

@@ -107,12 +107,8 @@ void AppSetup::onOpen()
                  }},
                 {fmt::format("Version: {}", common::FirmwareVersion),
                  [&]() {
-                     _magic_count++;
-                     if (_magic_count >= 10) {
-                         _magic_count  = 0;
-                         _destroy_menu = true;
-                         _worker       = std::make_unique<AboutWorker>();
-                     }
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<CheckUpdateWorker>();
                  }},
             },
         },

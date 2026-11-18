@@ -28,5 +28,5 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<gemini::GeminiLiveClient> _client;
     std::unique_ptr<gemini::GeminiConfigServer> _web_server;
-    bool _btn_a_hold_talking = false;
+    bool _is_talking_active = false;
 };

@@ -472,6 +472,15 @@ inline constexpr const char OTA_HTML[] = R"rawliteral(<!doctype html>
           }
         };
 
+        xhr.timeout = 180000;
+        xhr.ontimeout = () => {
+          alertDanger.textContent = 'Upload timed out. Please check connection and try again.';
+          alertDanger.classList.add('active');
+          progressStatus.textContent = 'Timed Out';
+          uploadBtn.disabled = false;
+          dropZone.style.pointerEvents = 'auto';
+        };
+
         xhr.onerror = () => {
           alertDanger.textContent = 'Network error during firmware transfer. Please check connection and try again.';
           alertDanger.classList.add('active');

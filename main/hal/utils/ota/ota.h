@@ -70,7 +70,7 @@ private:
     void stop_access_point();
     void stop_web_server();
 
-    mutable std::mutex _mutex;
+    mutable std::recursive_mutex _mutex;
     Status _status;
     bool _is_running = false;
     bool _started_ap = false;

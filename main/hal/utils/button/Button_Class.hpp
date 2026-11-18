@@ -52,6 +52,12 @@ public:
         return _clickCount;
     }
 
+    void clearClickCount(void)
+    {
+        _clickCount   = 0;
+        _currentState = state_nochange;
+    }
+
     /// Returns true if the button is currently held pressed.
     bool isHolding(void) const
     {

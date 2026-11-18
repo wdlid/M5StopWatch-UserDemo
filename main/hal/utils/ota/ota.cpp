@@ -34,7 +34,7 @@ namespace {
 
 constexpr const char* _tag = "OTA-Manager";
 constexpr const char* _ota_ap_prefix = "M5StopWatch-OTA";
-constexpr std::size_t _chunk_buffer_size = 2048;
+constexpr std::size_t _chunk_buffer_size = 4096;
 
 static void restart_timer_callback(void* /*arg*/)
 {
@@ -114,19 +114,19 @@ void OtaManager::log(const std::string& msg)
 
 bool OtaManager::isRunning() const
 {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _is_running;
 }
 
 Status OtaManager::getStatus() const
 {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     return _status;
 }
 
 void OtaManager::setStatus(State state, int progress, std::size_t received, std::size_t total, const std::string& msg)
 {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     _status.state = state;
     _status.progress = progress;
     _status.bytesReceived = received;
@@ -138,7 +138,7 @@ void OtaManager::setStatus(State state, int progress, std::size_t received, std:
 
 bool OtaManager::start(LogCallback onLog)
 {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (_is_running) {
         return true;
     }
@@ -186,7 +186,7 @@ bool OtaManager::start(LogCallback onLog)
 
 void OtaManager::stop()
 {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::lock_guard<std::recursive_mutex> lock(_mutex);
     if (!_is_running) {
         return;
     }
@@ -444,17 +444,27 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
 
     mgr.setStatus(State::Flashing, 0, 0, req->content_len, "Writing firmware to flash...");
 
-    char buffer[_chunk_buffer_size];
+    auto buffer = std::make_unique<char[]>(_chunk_buffer_size);
+    if (!buffer) {
+        ESP_LOGE(_tag, "Failed to allocate OTA buffer");
+        esp_ota_abort(ota_handle);
+        mgr.setStatus(State::Failed, 0, 0, req->content_len, "Out of memory");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+
     int remaining = req->content_len;
     size_t received_total = 0;
+    size_t last_yield_bytes = 0;
+    int last_percent = -1;
     bool magic_checked = false;
 
     while (remaining > 0) {
-        int to_read = (remaining < static_cast<int>(sizeof(buffer))) ? remaining : sizeof(buffer);
-        int received = httpd_req_recv(req, buffer, to_read);
+        int to_read = (remaining < static_cast<int>(_chunk_buffer_size)) ? remaining : static_cast<int>(_chunk_buffer_size);
+        int received = httpd_req_recv(req, buffer.get(), to_read);
         if (received <= 0) {
             if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-                GetHAL().feedTheDog();
+                vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
             ESP_LOGE(_tag, "Receive error: %d", received);
@@ -477,7 +487,7 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
             magic_checked = true;
         }
 
-        err = esp_ota_write(ota_handle, buffer, received);
+        err = esp_ota_write(ota_handle, buffer.get(), received);
         if (err != ESP_OK) {
             ESP_LOGE(_tag, "esp_ota_write failed: %s", esp_err_to_name(err));
             esp_ota_abort(ota_handle);
@@ -490,9 +500,16 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
         remaining -= received;
 
         int percent = static_cast<int>((received_total * 100) / req->content_len);
-        mgr.setStatus(State::Flashing, percent, received_total, req->content_len, "Flashing...");
+        if (percent != last_percent || remaining == 0) {
+            last_percent = percent;
+            mgr.setStatus(State::Flashing, percent, received_total, req->content_len, "Flashing...");
+        }
 
-        GetHAL().feedTheDog();
+        // Yield briefly every 32KB to let the network stack and UI tasks run smoothly
+        if ((received_total - last_yield_bytes) >= 32768) {
+            last_yield_bytes = received_total;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
 
     err = esp_ota_end(ota_handle);

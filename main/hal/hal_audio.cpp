@@ -96,9 +96,13 @@ public:
         esp_codec_dev_open(_codec_dev, &fs);
     }
 
-    void updateSpectrum(Hal::AudioSpectrumFrame& frame)
+    void updateSpectrum()
     {
         if (_spectrum_available == false) {
+            return;
+        }
+
+        if (_is_playing || _stream_count > 0) {
             return;
         }
 
@@ -110,7 +114,31 @@ public:
             return;
         }
 
-        _process_spectrum_frame(frame);
+        std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
+        _process_spectrum_frame(_audio_spectrum_frame);
+    }
+
+    void feedSpectrum(const int16_t* pcm, std::size_t count)
+    {
+        if (!_spectrum_available || count == 0 || pcm == nullptr) {
+            return;
+        }
+        std::size_t n = std::min<std::size_t>(count, spectrum_fft_size);
+        std::move(_spectrum_time_domain.begin() + n, _spectrum_time_domain.end(), _spectrum_time_domain.begin());
+        const std::size_t src_offset = count >= spectrum_fft_size ? (count - n) : 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            _spectrum_time_domain[spectrum_fft_size - n + i] =
+                static_cast<float>(pcm[src_offset + i]) / 32768.0f;
+        }
+        _spectrum_samples_ready = spectrum_fft_size;
+        std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
+        _process_spectrum_frame(_audio_spectrum_frame);
+    }
+
+    Hal::AudioSpectrumFrame getSpectrum()
+    {
+        std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
+        return _audio_spectrum_frame;
     }
 
     void setVolume(int volume)
@@ -234,6 +262,11 @@ public:
             _audio_data.clear();
         }
         _current_rms.store(0.0f, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
+            _audio_spectrum_frame.bands.fill(0.0f);
+            _audio_spectrum_frame.peakFrequencyHz = 0.0f;
+        }
         xTaskNotifyGive(_task_handle);
     }
 
@@ -261,6 +294,9 @@ public:
             out16k.clear();
             return false;
         }
+
+        // Feed live spectrum from recorded microphone samples
+        feedSpectrum(_record_raw_buf.data(), _record_raw_buf.size());
 
         // Remove DC offset and downsample from 44100 Hz to 16000 Hz using boxcar anti-aliasing filter
         int64_t dc_sum = 0;
@@ -405,6 +441,8 @@ private:
                     float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(popped)) / 32768.0);
                     _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
 
+                    feedSpectrum(stream_chunk.data(), popped);
+
                     esp_codec_dev_write(_codec_dev, (void*)stream_chunk.data(), popped * sizeof(int16_t));
                     continue;
                 }
@@ -429,6 +467,11 @@ private:
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
                                         _silence_buffer.size() * sizeof(int16_t));
                     _current_rms.store(0.0f, std::memory_order_relaxed);
+                    {
+                        std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
+                        _audio_spectrum_frame.bands.fill(0.0f);
+                        _audio_spectrum_frame.peakFrequencyHz = 0.0f;
+                    }
                     was_streaming = false;
                 }
 
@@ -667,6 +710,8 @@ private:
     float _spectrum_normalization_level                                            = 0.03f;
     bool _spectrum_available                                                       = false;
     bool _is_playing                                                               = false;
+    std::mutex _spectrum_frame_mutex;
+    Hal::AudioSpectrumFrame _audio_spectrum_frame                                  = {};
 } _audio_codec;
 
 void Hal::audio_init()
@@ -732,7 +777,12 @@ int Hal::getAudioSampleRate()
 
 void Hal::updateAudioSpectrum()
 {
-    _audio_codec.updateSpectrum(_audio_spectrum);
+    _audio_codec.updateSpectrum();
+}
+
+Hal::AudioSpectrumFrame Hal::getAudioSpectrum() const
+{
+    return const_cast<AudioCodec&>(_audio_codec).getSpectrum();
 }
 
 void Hal::setSpeakerEnable(bool enable)

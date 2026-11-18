@@ -17,6 +17,7 @@
 #include <i2c_bus.h>
 #include <string_view>
 #include <array>
+#include <mutex>
 #include <M5GFX.h>
 
 /**
@@ -175,6 +176,7 @@ public:
     void setScreenTimeout(uint32_t seconds, bool saveToSettings = true);
     uint32_t getScreenTimeout(bool loadFromSettings = false);
     bool isScreenSleeping() const;
+    uint32_t getLastWakeTime() const;
     void sleepScreen();
     void wakeScreen();
     void resetActivityTimer();
@@ -223,10 +225,7 @@ public:
         float peakFrequencyHz                  = 0.0f;
     };
     void updateAudioSpectrum();
-    const AudioSpectrumFrame& getAudioSpectrum() const
-    {
-        return _audio_spectrum;
-    }
+    AudioSpectrumFrame getAudioSpectrum() const;
 
     void playBootSfx();
 
@@ -362,7 +361,6 @@ private:
     i2c_bus_handle_t _i2c_bus = nullptr;
     ImuData _imu_data;
     ButtonConfig _btn_config;
-    AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
     int _spk_volume    = 80;
 

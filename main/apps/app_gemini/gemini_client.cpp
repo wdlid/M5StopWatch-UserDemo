@@ -245,11 +245,20 @@ void GeminiLiveClient::stop()
     _running    = false;
     _ptt_active = false;
     GetHAL().audioClearStream();
+
+    _ws.abort();
+
     if (_task_handle != nullptr) {
-        for (int i = 0; i < 40 && _task_handle != nullptr; ++i) {
-            vTaskDelay(pdMS_TO_TICKS(25));
+        for (int i = 0; i < 50 && _task_handle != nullptr; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (_task_handle != nullptr) {
+            TaskHandle_t th = _task_handle;
+            _task_handle    = nullptr;
+            vTaskDelete(th);
         }
     }
+
     _ws.disconnect();
     _state = SessionState::Disconnected;
 }

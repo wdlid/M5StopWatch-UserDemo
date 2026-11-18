@@ -105,8 +105,8 @@ void Hal::pmic_init()
     _pm1->btnSetConfig(M5PM1_BTN_TYPE_CLICK, M5PM1_BTN_CLICK_DELAY_1000MS);
     // disable WDT, default is open
     _pm1->wdtSet(0);
-    //  hold LDO power close when power off, keep power for RTC
-    _pm1->ldoSetPowerHold(true);
+    // disable LDO power hold so power can be cut when shutting down
+    _pm1->ldoSetPowerHold(false);
 
     // set charge enable or disable, this setting will keep working after power off
     _pm1->setChargeEnable(true);
@@ -154,11 +154,15 @@ void Hal::powerOff()
 {
     mclog::tagInfo(_tag, "power off requested");
     vibrate(120, 100);
-    delay(150);
+    delay(200);
+    sleepScreen();
+    setPowerLed(false);
     if (_pm1) {
+        _pm1->setLedEnLevel(false);
+        _pm1->ldoSetPowerHold(false);
         _pm1->shutdown();
     }
-    sleepScreen();
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
     esp_deep_sleep_start();
 }
 

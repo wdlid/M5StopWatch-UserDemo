@@ -8,7 +8,9 @@
 #include <mooncake_log.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
+#include <esp_log.h>
 #include <esp_random.h>
+#include <esp_timer.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/error.h>
 #include <mbedtls/net_sockets.h>
@@ -596,11 +598,29 @@ EchWebSocketClient::~EchWebSocketClient()
     disconnect();
 }
 
+void EchWebSocketClient::abort()
+{
+    _abort = true;
+    int fd = _sockfd;
+    if (fd >= 0) {
+        ::shutdown(fd, SHUT_RDWR);
+    }
+}
+
 void EchWebSocketClient::disconnect()
 {
     _connected = false;
+    int fd     = _sockfd;
+    _sockfd    = -1;
+    if (fd >= 0) {
+        ::shutdown(fd, SHUT_RDWR);
+        ::close(fd);
+    }
+
     if (_tls_initialized) {
-        mbedtls_ssl_close_notify(&_ssl);
+        if (mbedtls_ssl_is_handshake_over(&_ssl) == 1) {
+            mbedtls_ssl_close_notify(&_ssl);
+        }
         mbedtls_ssl_free(&_ssl);
         mbedtls_ssl_config_free(&_conf);
         mbedtls_ctr_drbg_free(&_ctr_drbg);
@@ -612,10 +632,6 @@ void EchWebSocketClient::disconnect()
         mbedtls_ctr_drbg_init(&_ctr_drbg);
         _tls_initialized = false;
     }
-    if (_sockfd >= 0) {
-        close(_sockfd);
-        _sockfd = -1;
-    }
     _rx_residual.clear();
     _frag_buffer.clear();
     _frag_opcode = 0;
@@ -623,6 +639,9 @@ void EchWebSocketClient::disconnect()
 
 bool EchWebSocketClient::openTcpSocket(const std::string& ip, uint16_t port, int timeoutMs)
 {
+    if (_abort.load()) {
+        return false;
+    }
     if (_sockfd >= 0) {
         close(_sockfd);
         _sockfd = -1;
@@ -703,11 +722,14 @@ static int socket_bio_recv(void* ctx, unsigned char* buf, std::size_t len)
     if (fd < 0) return MBEDTLS_ERR_NET_INVALID_CONTEXT;
     ssize_t ret = ::recv(fd, buf, len, 0);
     if (ret == 0) {
-        return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
+        return 0; // Clean EOF
     }
     if (ret < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return MBEDTLS_ERR_SSL_WANT_READ;
+        }
+        if (errno == ECONNRESET || errno == EPIPE) {
+            return MBEDTLS_ERR_NET_CONN_RESET;
         }
         return MBEDTLS_ERR_NET_RECV_FAILED;
     }
@@ -719,6 +741,11 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
                                              bool preferTls13,
                                              std::string& outError)
 {
+    if (_abort.load()) {
+        outError = "Handshake aborted";
+        return false;
+    }
+
 #ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
     psa_crypto_init();
 #endif
@@ -776,13 +803,23 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
     mbedtls_ssl_set_hostname(&_ssl, effective_sni.c_str());
     mbedtls_ssl_set_bio(&_ssl, &_sockfd, socket_bio_send, socket_bio_recv, nullptr);
 
+    uint32_t start_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
     while ((ret = mbedtls_ssl_handshake(&_ssl)) != 0) {
+        if (_abort.load()) {
+            outError = "TLS handshake aborted";
+            return false;
+        }
+        if ((static_cast<uint32_t>(esp_timer_get_time() / 1000) - start_ms) > 8000) {
+            outError = "TLS handshake timed out";
+            return false;
+        }
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
             char err_buf[96] = {};
             mbedtls_strerror(ret, err_buf, sizeof(err_buf));
             outError = std::string("TLS handshake failed: ") + err_buf;
             return false;
         }
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     return true;
@@ -968,7 +1005,13 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
                                  const DohEchOptions& opts,
                                  std::string& outError)
 {
+    _abort = false;
     disconnect();
+
+    if (_abort.load()) {
+        outError = "Aborted";
+        return false;
+    }
 
     std::string host;
     uint16_t port = 443;
@@ -981,6 +1024,11 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
     ResolvedEndpoint resolved;
     if (!resolveHostAndEch(host, opts, resolved)) {
         outError = "DNS / DoH resolution failed for " + host;
+        return false;
+    }
+
+    if (_abort.load()) {
+        outError = "Aborted";
         return false;
     }
 
@@ -999,8 +1047,14 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
 
     for (const auto& ip : resolved.candidateIps) {
         for (const auto& sni_name : sni_candidates) {
+            if (_abort.load()) {
+                outError = "Aborted";
+                disconnect();
+                return false;
+            }
+
             mclog::tagInfo(_tag, "Connecting TCP {}:{} (Host={}, SNI={})...", ip, port, host, sni_name);
-            if (!openTcpSocket(ip, port, 6000)) {
+            if (!openTcpSocket(ip, port, 4000)) {
                 outError = "TCP connect timeout to " + ip;
                 continue;
             }
@@ -1016,6 +1070,10 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
             if (!performWsUpgrade(host, path_and_query, bearerToken, apiKeyHeader, outError)) {
                 mclog::tagWarn(_tag, "WS upgrade failed with {} (SNI={}): {}", ip, sni_name, outError);
                 disconnect();
+                // If 401 or 403, this is an auth rejection from server; retrying other IPs will not help
+                if (outError.find("401") != std::string::npos || outError.find("403") != std::string::npos) {
+                    return false;
+                }
                 continue;
             }
 
