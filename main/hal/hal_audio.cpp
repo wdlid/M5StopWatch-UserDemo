@@ -6,13 +6,16 @@
 #include "hal.h"
 #include "utils/settings/settings.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <mooncake_log.h>
 #include <driver/i2s_std.h>
 #include <esp_dsp.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mutex>
@@ -31,13 +34,25 @@ public:
     static constexpr int sample_rate       = 44100;
     static constexpr int spectrum_fft_size = 512;
     static constexpr int spectrum_hop_size = 256;
+    // PSRAM streaming ring buffer capacity in samples (~6 seconds at 44.1kHz = 264,600 samples)
+    static constexpr std::size_t stream_ring_capacity = 264600;
 
     void init(i2c_master_bus_handle_t i2c_bus)
     {
         _silence_buffer.resize(sample_rate * 0.1);
         _silence_buffer.assign(_silence_buffer.size(), 0);
+
+        _stream_ring = static_cast<int16_t*>(
+            heap_caps_malloc(stream_ring_capacity * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (_stream_ring == nullptr) {
+            _stream_ring = static_cast<int16_t*>(malloc(32768 * sizeof(int16_t)));
+            _stream_capacity = _stream_ring ? 32768 : 0;
+        } else {
+            _stream_capacity = stream_ring_capacity;
+        }
+
         _spectrum_init();
-        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 4 * 1024, this, 5,
+        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 6 * 1024, this, 5,
                     &_task_handle);
 
         _i2s_init();
@@ -71,6 +86,7 @@ public:
         _codec_dev = esp_codec_dev_new(&dev_cfg);
 
         esp_codec_dev_set_in_gain(_codec_dev, 30.0);
+        _current_in_gain = 30.0f;
 
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
@@ -99,13 +115,13 @@ public:
 
     void setVolume(int volume)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::lock_guard<std::mutex> lock(_ctrl_mutex);
         esp_codec_dev_set_out_vol(_codec_dev, volume);
     }
 
     int getVolume()
     {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::lock_guard<std::mutex> lock(_ctrl_mutex);
         int volume = 0;
         esp_codec_dev_get_out_vol(_codec_dev, &volume);
         return volume;
@@ -113,38 +129,177 @@ public:
 
     void setMicGain(float gain)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
+        std::lock_guard<std::mutex> lock(_ctrl_mutex);
+        if (std::fabs(_current_in_gain - gain) > 0.1f) {
+            esp_codec_dev_set_in_gain(_codec_dev, gain);
+            _current_in_gain = gain;
+        }
     }
 
     bool isPlaying()
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-        return _is_playing;
+        std::lock_guard<std::mutex> lock(_play_mutex);
+        return _is_playing || _stream_count > 0;
+    }
+
+    float getCurrentRms() const
+    {
+        return _current_rms.load(std::memory_order_relaxed);
     }
 
     void play(std::vector<int16_t>& data, bool async)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
         if (async) {
-            // Support interruption: overwrite data and notify task
-            _audio_data = data;
-            _is_playing = true;
+            {
+                std::lock_guard<std::mutex> lock(_play_mutex);
+                _audio_data = data;
+                _is_playing = true;
+            }
             xTaskNotifyGive(_task_handle);
         } else {
-            if (_is_playing) {
-                mclog::tagWarn(_tag, "audio is playing");
-                return;
+            {
+                std::lock_guard<std::mutex> lock(_play_mutex);
+                if (_is_playing) {
+                    mclog::tagWarn(_tag, "audio is playing");
+                    return;
+                }
             }
             _write(data);
         }
     }
 
+    void pushStreamPcm(const int16_t* samples, std::size_t count, int srcRate)
+    {
+        if (samples == nullptr || count == 0 || _stream_ring == nullptr || _stream_capacity == 0) {
+            return;
+        }
+
+        // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with anti-click smoothing
+        const double ratio = static_cast<double>(sample_rate) / static_cast<double>(std::max(8000, srcRate));
+        const std::size_t out_count = static_cast<std::size_t>(std::ceil(count * ratio));
+        if (out_count == 0) {
+            return;
+        }
+
+        double sum_sq = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(_play_mutex);
+            const bool starting_fresh = (_stream_count == 0 && !_is_playing);
+            for (std::size_t i = 0; i < out_count; ++i) {
+                const double src_pos = static_cast<double>(i) / ratio;
+                const std::size_t idx0 = std::min<std::size_t>(static_cast<std::size_t>(src_pos), count - 1);
+                const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
+                const double frac      = src_pos - static_cast<double>(idx0);
+
+                double val = static_cast<double>(samples[idx0]) * (1.0 - frac) +
+                             static_cast<double>(samples[idx1]) * frac;
+
+                // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
+                if (starting_fresh && i < 64) {
+                    const double fade = 0.5 * (1.0 - std::cos(M_PI * static_cast<double>(i) / 64.0));
+                    val *= fade;
+                }
+
+                int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0, 32767.0));
+                sum_sq += static_cast<double>(sample_val) * static_cast<double>(sample_val);
+
+                if (_stream_count < _stream_capacity) {
+                    _stream_ring[_stream_write_pos] = sample_val;
+                    _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
+                    _stream_count++;
+                } else {
+                    // Ring buffer full: overwrite oldest sample
+                    _stream_ring[_stream_write_pos] = sample_val;
+                    _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
+                    _stream_read_pos                = (_stream_read_pos + 1) % _stream_capacity;
+                }
+            }
+            _is_playing = true;
+        }
+
+        const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(out_count)) / 32768.0);
+        _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+
+        xTaskNotifyGive(_task_handle);
+    }
+
+    void clearStream()
+    {
+        {
+            std::lock_guard<std::mutex> lock(_play_mutex);
+            _stream_read_pos  = 0;
+            _stream_write_pos = 0;
+            _stream_count     = 0;
+            _stream_abort_req = true;
+            _audio_data.clear();
+        }
+        _current_rms.store(0.0f, std::memory_order_relaxed);
+        xTaskNotifyGive(_task_handle);
+    }
+
+    std::size_t getStreamQueuedMs()
+    {
+        std::lock_guard<std::mutex> lock(_play_mutex);
+        return (_stream_count * 1000ULL) / sample_rate;
+    }
+
+    bool recordStream16k(std::vector<int16_t>& out16k, uint16_t durationMs, float gain)
+    {
+        std::lock_guard<std::mutex> rx_lock(_rx_mutex);
+        setMicGain(gain);
+
+        const std::size_t src_samples = static_cast<std::size_t>((sample_rate * durationMs) / 1000);
+        if (src_samples == 0) {
+            out16k.clear();
+            return false;
+        }
+
+        _record_raw_buf.resize(src_samples);
+        esp_err_t ret = esp_codec_dev_read(_codec_dev, _record_raw_buf.data(), src_samples * sizeof(int16_t));
+        if (ret != ESP_OK) {
+            mclog::tagError(_tag, "recordStream16k failed: {}", ret);
+            out16k.clear();
+            return false;
+        }
+
+        // Remove DC offset and downsample from 44100 Hz to 16000 Hz using boxcar anti-aliasing filter
+        int64_t dc_sum = 0;
+        for (std::size_t i = 0; i < src_samples; ++i) {
+            dc_sum += _record_raw_buf[i];
+        }
+        const int32_t dc_offset = static_cast<int32_t>(dc_sum / static_cast<int64_t>(src_samples));
+
+        const std::size_t dst_samples = static_cast<std::size_t>((16000ULL * durationMs) / 1000ULL);
+        out16k.resize(dst_samples);
+
+        double sum_sq = 0.0;
+        const double step = static_cast<double>(src_samples) / static_cast<double>(dst_samples);
+        for (std::size_t i = 0; i < dst_samples; ++i) {
+            const double start_f = i * step;
+            const std::size_t s0 = std::min<std::size_t>(static_cast<std::size_t>(start_f), src_samples - 1);
+            const std::size_t s1 = std::min<std::size_t>(s0 + 1, src_samples - 1);
+            const std::size_t s2 = std::min<std::size_t>(s0 + 2, src_samples - 1);
+
+            // 3-tap anti-aliasing weighted average [0.25, 0.50, 0.25]
+            const int32_t v0 = static_cast<int32_t>(_record_raw_buf[s0]) - dc_offset;
+            const int32_t v1 = static_cast<int32_t>(_record_raw_buf[s1]) - dc_offset;
+            const int32_t v2 = static_cast<int32_t>(_record_raw_buf[s2]) - dc_offset;
+            const int32_t filtered = (v0 + (v1 * 2) + v2) / 4;
+
+            const int16_t clamped = static_cast<int16_t>(std::clamp<int32_t>(filtered, -32768, 32767));
+            out16k[i]             = clamped;
+            sum_sq += static_cast<double>(clamped) * static_cast<double>(clamped);
+        }
+
+        const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(dst_samples)) / 32768.0);
+        _current_rms.store(std::clamp(rms * 4.5f, 0.0f, 1.0f), std::memory_order_relaxed);
+        return true;
+    }
+
     void record(std::vector<int16_t>& data, uint16_t durationMs, float gain)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
+        std::lock_guard<std::mutex> rx_lock(_rx_mutex);
+        setMicGain(gain);
 
         size_t sample_count = (size_t)(sample_rate * durationMs / 1000);
         size_t byte_size    = sample_count * sizeof(int16_t);
@@ -163,59 +318,121 @@ private:
     {
         mclog::tagInfo(_tag, "start audio play task");
         std::vector<int16_t> current_data;
+        constexpr std::size_t CHUNK_SAMPLES = 512;
+        std::array<int16_t, CHUNK_SAMPLES> stream_chunk = {};
+        bool was_streaming = false;
 
         while (1) {
-            // Wait for play request
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
             while (true) {
-                // Fetch data safely
+                bool has_oneshot      = false;
+                std::size_t popped    = 0;
+                bool abort_requested  = false;
+
                 {
-                    std::lock_guard<std::mutex> lock(_mutex);
-                    if (_audio_data.empty()) {
+                    std::lock_guard<std::mutex> lock(_play_mutex);
+                    if (_stream_abort_req) {
+                        _stream_abort_req = false;
+                        abort_requested   = true;
+                    }
+
+                    if (!_audio_data.empty()) {
+                        current_data = std::move(_audio_data);
+                        _audio_data.clear();
+                        has_oneshot = true;
+                        _is_playing = true;
+                    } else if (_stream_count > 0 && _stream_ring != nullptr) {
+                        popped = std::min<std::size_t>(_stream_count, CHUNK_SAMPLES);
+                        for (std::size_t i = 0; i < popped; ++i) {
+                            stream_chunk[i] = _stream_ring[_stream_read_pos];
+                            _stream_read_pos = (_stream_read_pos + 1) % _stream_capacity;
+                        }
+                        _stream_count -= popped;
+                        _is_playing = true;
+                    } else {
                         _is_playing = false;
-                        break;
                     }
-                    current_data = _audio_data;
-                    _audio_data.clear();
-                    _is_playing = true;
                 }
 
-                if (current_data.empty()) {
-                    break;
-                }
-
-                size_t offset        = 0;
-                size_t total_samples = current_data.size();
-                bool interrupted     = false;
-                // Chunk size in samples (e.g. 1024 bytes = 512 samples)
-                const size_t CHUNK_SAMPLES = 512;
-
-                while (offset < total_samples) {
-                    // Check for interruption (new play request)
-                    if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
-                        // mclog::tagInfo(_tag, "playback interrupted");
-                        interrupted = true;
-                        break;
-                    }
-
-                    size_t remain        = total_samples - offset;
-                    size_t write_samples = (remain > CHUNK_SAMPLES) ? CHUNK_SAMPLES : remain;
-
-                    esp_codec_dev_write(_codec_dev, (void*)&current_data[offset], write_samples * sizeof(int16_t));
-                    offset += write_samples;
-                }
-
-                if (interrupted) {
-                    // Stop current playback immediately and flush DMA
+                if (abort_requested) {
                     i2s_channel_disable(_tx_handle);
                     i2s_channel_enable(_tx_handle);
+                    esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
+                                        std::min<std::size_t>(_silence_buffer.size(), 512) * sizeof(int16_t));
+                    was_streaming = false;
+                }
+
+                if (has_oneshot) {
+                    size_t offset        = 0;
+                    size_t total_samples = current_data.size();
+                    bool interrupted     = false;
+
+                    while (offset < total_samples) {
+                        {
+                            std::lock_guard<std::mutex> lock(_play_mutex);
+                            if (!_audio_data.empty() || _stream_abort_req) {
+                                interrupted = true;
+                                break;
+                            }
+                        }
+
+                        size_t remain        = total_samples - offset;
+                        size_t write_samples = (remain > CHUNK_SAMPLES) ? CHUNK_SAMPLES : remain;
+
+                        esp_codec_dev_write(_codec_dev, (void*)&current_data[offset], write_samples * sizeof(int16_t));
+                        offset += write_samples;
+                    }
+
+                    if (interrupted) {
+                        i2s_channel_disable(_tx_handle);
+                        i2s_channel_enable(_tx_handle);
+                        continue;
+                    }
+
+                    esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
+                                        _silence_buffer.size() * sizeof(int16_t));
                     continue;
                 }
 
-                // Normal finish, play silence to avoid pop/waiting
-                esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                    _silence_buffer.size() * sizeof(int16_t));
+                if (popped > 0) {
+                    was_streaming = true;
+                    // Update RMS level for UI animation during playback
+                    double sum_sq = 0.0;
+                    for (std::size_t i = 0; i < popped; ++i) {
+                        sum_sq += static_cast<double>(stream_chunk[i]) * static_cast<double>(stream_chunk[i]);
+                    }
+                    float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(popped)) / 32768.0);
+                    _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+
+                    esp_codec_dev_write(_codec_dev, (void*)stream_chunk.data(), popped * sizeof(int16_t));
+                    continue;
+                }
+
+                if (was_streaming) {
+                    // Wait briefly (25ms) for jittery network packets before flushing silence tail
+                    vTaskDelay(pdMS_TO_TICKS(25));
+                    {
+                        std::lock_guard<std::mutex> lock(_play_mutex);
+                        if (_stream_count > 0 || !_audio_data.empty()) {
+                            continue;
+                        }
+                    }
+                    // Stream finished: apply short cosine fade-out from last sample + silence tail to prevent DMA pop
+                    int16_t last_sample = stream_chunk[popped > 0 ? popped - 1 : 0];
+                    std::array<int16_t, 128> fade_out = {};
+                    for (std::size_t i = 0; i < fade_out.size(); ++i) {
+                        double env  = 0.5 * (1.0 + std::cos(M_PI * static_cast<double>(i) / fade_out.size()));
+                        fade_out[i] = static_cast<int16_t>(last_sample * env);
+                    }
+                    esp_codec_dev_write(_codec_dev, (void*)fade_out.data(), fade_out.size() * sizeof(int16_t));
+                    esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
+                                        _silence_buffer.size() * sizeof(int16_t));
+                    _current_rms.store(0.0f, std::memory_order_relaxed);
+                    was_streaming = false;
+                }
+
+                break;
             }
         }
     }
@@ -282,7 +499,7 @@ private:
 
     bool _read_spectrum_hop()
     {
-        std::unique_lock<std::mutex> lock(_mutex, std::try_to_lock);
+        std::unique_lock<std::mutex> lock(_rx_mutex, std::try_to_lock);
         if (lock.owns_lock() == false) {
             return false;
         }
@@ -424,9 +641,20 @@ private:
     const audio_codec_if_t* _codec_if     = NULL;
 
     TaskHandle_t _task_handle;
-    std::mutex _mutex;
+    std::mutex _play_mutex;
+    std::mutex _rx_mutex;
+    std::mutex _ctrl_mutex;
     std::vector<int16_t> _audio_data;
     std::vector<int16_t> _silence_buffer;
+    std::vector<int16_t> _record_raw_buf;
+    int16_t* _stream_ring                                                          = nullptr;
+    std::size_t _stream_capacity                                                   = 0;
+    std::size_t _stream_read_pos                                                   = 0;
+    std::size_t _stream_write_pos                                                  = 0;
+    std::size_t _stream_count                                                      = 0;
+    bool _stream_abort_req                                                         = false;
+    float _current_in_gain                                                         = 30.0f;
+    std::atomic<float> _current_rms{0.0f};
     std::array<int16_t, spectrum_hop_size> _spectrum_pcm_hop                       = {};
     std::array<float, spectrum_fft_size> _spectrum_time_domain                     = {};
     std::array<float, spectrum_fft_size> _spectrum_window                          = {};
@@ -505,6 +733,36 @@ int Hal::getAudioSampleRate()
 void Hal::updateAudioSpectrum()
 {
     _audio_codec.updateSpectrum(_audio_spectrum);
+}
+
+void Hal::setSpeakerEnable(bool enable)
+{
+    ioe_speaker_enable(enable);
+}
+
+bool Hal::audioRecordStream16k(std::vector<int16_t>& out16k, uint16_t durationMs, float gain)
+{
+    return _audio_codec.recordStream16k(out16k, durationMs, gain);
+}
+
+void Hal::audioPushStreamPcm(const int16_t* samples, std::size_t count, int srcSampleRate)
+{
+    _audio_codec.pushStreamPcm(samples, count, srcSampleRate);
+}
+
+void Hal::audioClearStream()
+{
+    _audio_codec.clearStream();
+}
+
+std::size_t Hal::audioGetStreamQueuedMs()
+{
+    return _audio_codec.getStreamQueuedMs();
+}
+
+float Hal::audioGetCurrentRms()
+{
+    return _audio_codec.getCurrentRms();
 }
 
 namespace {

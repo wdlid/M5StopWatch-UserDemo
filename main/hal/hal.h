@@ -209,6 +209,14 @@ public:
     void audioPlay(std::vector<int16_t>& data, bool async = true);
     bool isAudioPlaying();
 
+    // Streaming audio API for Gemini Live full-duplex / PTT voice interaction
+    void setSpeakerEnable(bool enable);
+    bool audioRecordStream16k(std::vector<int16_t>& out16k, uint16_t durationMs = 60, float gain = 32.0f);
+    void audioPushStreamPcm(const int16_t* samples, std::size_t count, int srcSampleRate = 24000);
+    void audioClearStream();
+    std::size_t audioGetStreamQueuedMs();
+    float audioGetCurrentRms();
+
     struct AudioSpectrumFrame {
         static constexpr std::size_t bandCount = 20;
         std::array<float, bandCount> bands     = {};
