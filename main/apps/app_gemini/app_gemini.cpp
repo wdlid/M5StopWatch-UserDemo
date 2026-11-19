@@ -29,6 +29,7 @@ void AppGemini::onOpen()
     _client            = std::make_unique<gemini::GeminiLiveClient>();
     _web_server        = std::make_unique<gemini::GeminiConfigServer>();
     _is_talking_active = false;
+    _talk_release_ms   = 0;
 
     // Ensure Wi-Fi is enabled when opening Gemini Live
     if (!GetHAL().isWifiEnabled()) {
@@ -102,13 +103,14 @@ void AppGemini::onRunning()
         return;
     }
 
-    // Hold Button B OR hold the center pattern to talk
+    // Hold Button B OR hold the center pattern to talk (with 120ms release debounce against touch jitter)
     if (_client && !web_active) {
         const bool btn_b_pressed = GetHAL().btnB.isPressed() && !GetHAL().btnA.isPressed();
         const bool pattern_held  = _view && _view->isPatternPressed();
         const bool should_talk   = btn_b_pressed || pattern_held;
 
         if (should_talk) {
+            _talk_release_ms = 0;
             if (!_is_talking_active) {
                 _is_talking_active = true;
                 GetHAL().vibrate(25, 70);
@@ -116,9 +118,15 @@ void AppGemini::onRunning()
             }
         } else {
             if (_is_talking_active) {
-                _is_talking_active = false;
-                GetHAL().vibrate(20, 60);
-                _client->setPttTalking(false);
+                const uint32_t now = GetHAL().millis();
+                if (_talk_release_ms == 0) {
+                    _talk_release_ms = now;
+                } else if (now - _talk_release_ms >= 120) {
+                    _is_talking_active = false;
+                    _talk_release_ms   = 0;
+                    GetHAL().vibrate(20, 60);
+                    _client->setPttTalking(false);
+                }
             }
         }
     }
@@ -130,8 +138,10 @@ void AppGemini::onRunning()
         _client->start(cfg);
     }
 
-    // Audio spectrum & volume updates
-    GetHAL().updateAudioSpectrum();
+    // Audio spectrum & volume updates (skip mic read while PTT talking or AI speaking)
+    if (!_is_talking_active && (!_client || _client->getState() != gemini::SessionState::Speaking)) {
+        GetHAL().updateAudioSpectrum();
+    }
     const auto spectrum = GetHAL().getAudioSpectrum();
 
     LvglLockGuard lock;

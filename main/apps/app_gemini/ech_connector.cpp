@@ -865,13 +865,16 @@ int EchWebSocketClient::tlsReadExact(uint8_t* buf, std::size_t len, int timeoutM
     }
 
     while (got < len) {
-        if (_is_tls && mbedtls_ssl_get_bytes_avail(&_ssl) == 0 && timeoutMs >= 0) {
+        // Once at least 1 byte of the target read is read, wait up to 4000ms for the remaining bytes
+        // so we never return a partial WebSocket header when timeoutMs == 0
+        int effective_timeout = (got > 0 && timeoutMs < 1000) ? 4000 : timeoutMs;
+        if (_is_tls && mbedtls_ssl_get_bytes_avail(&_ssl) == 0 && effective_timeout >= 0) {
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(_sockfd, &rfds);
             struct timeval tv = {
-                .tv_sec  = timeoutMs / 1000,
-                .tv_usec = (timeoutMs % 1000) * 1000,
+                .tv_sec  = effective_timeout / 1000,
+                .tv_usec = (effective_timeout % 1000) * 1000,
             };
             int sel = select(_sockfd + 1, &rfds, nullptr, nullptr, &tv);
             if (sel == 0) {
@@ -880,13 +883,13 @@ int EchWebSocketClient::tlsReadExact(uint8_t* buf, std::size_t len, int timeoutM
             if (sel < 0) {
                 return -1;
             }
-        } else if (!_is_tls && timeoutMs >= 0) {
+        } else if (!_is_tls && effective_timeout >= 0) {
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(_sockfd, &rfds);
             struct timeval tv = {
-                .tv_sec  = timeoutMs / 1000,
-                .tv_usec = (timeoutMs % 1000) * 1000,
+                .tv_sec  = effective_timeout / 1000,
+                .tv_usec = (effective_timeout % 1000) * 1000,
             };
             int sel = select(_sockfd + 1, &rfds, nullptr, nullptr, &tv);
             if (sel == 0) {

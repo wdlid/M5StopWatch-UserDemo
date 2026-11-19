@@ -97,9 +97,9 @@ public:
 
         static esp_codec_dev_vol_map_t vol_map[] = {
             {.vol = 0, .db_value = -50.0f},
-            {.vol = 50, .db_value = -10.0f},
-            {.vol = 80, .db_value = 3.0f},
-            {.vol = 100, .db_value = 12.0f},
+            {.vol = 50, .db_value = -12.0f},
+            {.vol = 80, .db_value = -2.0f},
+            {.vol = 100, .db_value = 4.0f},
         };
         esp_codec_dev_vol_curve_t vol_curve = {
             .vol_map = vol_map,
@@ -114,8 +114,11 @@ public:
             return;
         }
 
-        if (_is_playing || _stream_count > 0) {
-            return;
+        {
+            std::lock_guard<std::mutex> lock(_play_mutex);
+            if (_is_playing || _stream_count > 0 || _stream_prebuffering || _stream_active) {
+                return;
+            }
         }
 
         if (_read_spectrum_hop() == false) {
@@ -221,47 +224,62 @@ public:
             GetHAL().setSpeakerEnable(true);
         }
 
-        // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) using float hardware FPU
-        const float ratio = static_cast<float>(sample_rate) / static_cast<float>(std::max(8000, srcRate));
-        const std::size_t out_count = static_cast<std::size_t>(std::ceil(count * ratio));
-        if (out_count == 0) {
-            return;
-        }
+        // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with continuous phase across chunks
+        const float step = static_cast<float>(std::max(8000, srcRate)) / static_cast<float>(sample_rate);
 
-        // Boost conversational speech headroom and scale with global speaker volume setting
-        const float vol_norm    = std::clamp(static_cast<float>(spk_vol) / 100.0f, 0.0f, 1.0f);
-        const float speech_gain = 2.8f * (0.35f + 0.65f * vol_norm);
+        // Keep speech headroom clean (ES8311 DAC hardware volume already handles speaker level)
+        const float speech_gain = 1.15f;
 
-        float sum_sq = 0.0f;
-        bool trigger_task = false;
+        float sum_sq            = 0.0f;
+        std::size_t out_samples = 0;
+        bool trigger_task       = false;
         {
             std::lock_guard<std::mutex> lock(_play_mutex);
-            const bool starting_fresh = (_stream_count == 0 && !_is_playing && !_stream_active);
-            for (std::size_t i = 0; i < out_count; ++i) {
-                const float src_pos = static_cast<float>(i) / ratio;
-                const std::size_t idx0 = std::min<std::size_t>(static_cast<std::size_t>(src_pos), count - 1);
-                const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
-                const float frac       = src_pos - static_cast<float>(idx0);
+            const bool starting_fresh = (_stream_count == 0 && !_is_playing && !_stream_active && !_stream_has_prev);
+            if (starting_fresh) {
+                _resample_pos    = 0.0f;
+                _prev_src_sample = samples[0];
+                _stream_has_prev = true;
+            }
 
-                float val = (static_cast<float>(samples[idx0]) * (1.0f - frac) +
-                             static_cast<float>(samples[idx1]) * frac) *
-                            speech_gain;
+            float pos = _resample_pos;
+            const float limit = static_cast<float>(count) - 1.0f;
+            while (pos <= limit) {
+                float s0 = 0.0f;
+                float s1 = 0.0f;
+                float frac = 0.0f;
+
+                if (pos < 0.0f) {
+                    s0   = static_cast<float>(_prev_src_sample);
+                    s1   = static_cast<float>(samples[0]);
+                    frac = pos + 1.0f;
+                } else {
+                    const std::size_t idx0 = static_cast<std::size_t>(pos);
+                    const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
+                    frac                   = pos - static_cast<float>(idx0);
+                    s0                     = static_cast<float>(samples[idx0]);
+                    s1                     = static_cast<float>(samples[idx1]);
+                }
+
+                float val = (s0 * (1.0f - frac) + s1 * frac) * speech_gain;
 
                 // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
-                if (starting_fresh && i < 64) {
-                    const float fade = 0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(i) / 64.0f));
+                if (starting_fresh && out_samples < 64) {
+                    const float fade =
+                        0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(out_samples) / 64.0f));
                     val *= fade;
                 }
 
-                // Soft-knee saturation above +/-24000 to keep loud speech punchy without harsh digital clipping
-                if (val > 24000.0f) {
-                    val = 24000.0f + 8767.0f * std::tanh((val - 24000.0f) / 8767.0f);
-                } else if (val < -24000.0f) {
-                    val = -24000.0f + 8768.0f * std::tanh((val + 24000.0f) / 8768.0f);
+                // Soft-knee limiter above +/-26000 to prevent harsh digital clipping on peaks
+                if (val > 26000.0f) {
+                    val = 26000.0f + 6767.0f * std::tanh((val - 26000.0f) / 6767.0f);
+                } else if (val < -26000.0f) {
+                    val = -26000.0f + 6768.0f * std::tanh((val + 26000.0f) / 6768.0f);
                 }
 
                 int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
                 sum_sq += static_cast<float>(sample_val) * static_cast<float>(sample_val);
+                out_samples++;
 
                 if (_stream_count < _stream_capacity) {
                     _stream_ring[_stream_write_pos] = sample_val;
@@ -273,7 +291,13 @@ public:
                     _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
                     _stream_read_pos                = (_stream_read_pos + 1) % _stream_capacity;
                 }
+
+                pos += step;
             }
+
+            _resample_pos    = pos - static_cast<float>(count);
+            _prev_src_sample = samples[count - 1];
+            _stream_has_prev = true;
 
             // Pre-buffering jitter filter: accumulate ~400ms before starting playback to absorb initial network bursts
             constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.40f);
@@ -296,8 +320,10 @@ public:
             }
         }
 
-        const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<float>(out_count)) / 32768.0f);
-        _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+        if (out_samples > 0) {
+            const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<float>(out_samples)) / 32768.0f);
+            _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+        }
 
         if (trigger_task) {
             xTaskNotifyGive(_task_handle);
@@ -313,6 +339,9 @@ public:
             _stream_count        = 0;
             _stream_prebuffering = false;
             _stream_active       = false;
+            _stream_has_prev     = false;
+            _resample_pos        = 0.0f;
+            _prev_src_sample     = 0;
             _stream_abort_req    = true;
             _is_playing          = false;
             _audio_data.clear();
@@ -544,6 +573,9 @@ private:
                         std::lock_guard<std::mutex> lock(_play_mutex);
                         _stream_active       = false;
                         _stream_prebuffering = false;
+                        _stream_has_prev     = false;
+                        _resample_pos        = 0.0f;
+                        _prev_src_sample     = 0;
                         _is_playing          = false;
                     }
                     was_streaming = false;
@@ -775,6 +807,9 @@ private:
     bool _stream_abort_req                                                         = false;
     bool _stream_active                                                            = false;
     bool _stream_prebuffering                                                      = false;
+    bool _stream_has_prev                                                          = false;
+    float _resample_pos                                                            = 0.0f;
+    int16_t _prev_src_sample                                                       = 0;
     TickType_t _stream_prebuffer_start                                             = 0;
     float _current_in_gain                                                         = 30.0f;
     std::atomic<float> _current_rms{0.0f};

@@ -227,13 +227,16 @@ GeminiLiveClient::~GeminiLiveClient()
 void GeminiLiveClient::start(const GeminiConfig& config)
 {
     stop();
-    _config          = config;
-    _running         = true;
-    _ptt_active      = false;
-    _ptt_just_started = false;
-    _ptt_just_ended  = false;
-    _setup_complete  = false;
-    _state           = SessionState::Connecting;
+    _config                        = config;
+    _running                       = true;
+    _ptt_active                    = false;
+    _ptt_just_started              = false;
+    _ptt_just_ended                = false;
+    _setup_complete                = false;
+    _server_turn_finished          = true;
+    _ignore_current_turn_audio     = false;
+    _in_progress_continuation_count = 0;
+    _state                         = SessionState::Connecting;
     setStatusText("Connecting...");
 
     xTaskCreate([](void* arg) { static_cast<GeminiLiveClient*>(arg)->taskLoop(); }, "gemini_live", 16 * 1024, this, 5,
@@ -269,8 +272,10 @@ void GeminiLiveClient::setPttTalking(bool talking)
     if (talking && !prev) {
         GetHAL().resetActivityTimer();
         GetHAL().audioClearStream();
-        _ptt_just_started = true;
-        _ptt_just_ended   = false;
+        // If server is still streaming the old turn, ignore any remaining in-flight audio until interrupted/turnComplete
+        _ignore_current_turn_audio = !_server_turn_finished.load();
+        _ptt_just_started          = true;
+        _ptt_just_ended            = false;
         if (_setup_complete.load()) {
             _state = SessionState::Listening;
             setStatusText("Listening...");
@@ -554,7 +559,7 @@ std::string GeminiLiveClient::executeToolCalls(const std::string& rawJsonText)
 
 void GeminiLiveClient::handleServerBinaryPcm(const uint8_t* data, std::size_t len)
 {
-    if (data == nullptr || len < 2 || _ptt_active.load()) {
+    if (data == nullptr || len < 2) {
         return;
     }
 
@@ -564,6 +569,11 @@ void GeminiLiveClient::handleServerBinaryPcm(const uint8_t* data, std::size_t le
         return;
     }
 
+    if (_ptt_active.load() || _ignore_current_turn_audio.load()) {
+        return;
+    }
+
+    _server_turn_finished = false;
     GetHAL().resetActivityTimer();
     if (_state.load() != SessionState::Speaking) {
         _state = SessionState::Speaking;
@@ -583,7 +593,7 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
 
     // Fast path for large inlineData audio chunks in standard JSON mode without blowing up DOM memory
     const std::size_t inline_pos = jsonText.find("\"inlineData\"");
-    if (inline_pos != std::string::npos && !_ptt_active.load()) {
+    if (inline_pos != std::string::npos && !_ptt_active.load() && !_ignore_current_turn_audio.load()) {
         const std::size_t data_key = jsonText.find("\"data\"", inline_pos);
         if (data_key != std::string::npos) {
             const std::size_t q1 = jsonText.find('"', data_key + 6);
@@ -602,7 +612,9 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
     if (jsonText.find("\"setupComplete\"") != std::string::npos) {
         if (!_setup_complete.exchange(true)) {
             mclog::tagInfo(_tag, "setupComplete received! Gemini 3.8 Live ready.");
-            _state = SessionState::Ready;
+            _server_turn_finished      = true;
+            _ignore_current_turn_audio = false;
+            _state                     = SessionState::Ready;
             setStatusText("Ready - Hold/Tap to Talk");
             audio::play_tone_from_midi(72, 0.04f, 0.4f);
         }
@@ -611,6 +623,7 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
     if (jsonText.find("\"toolCall\"") != std::string::npos) {
         std::string tool_resp = executeToolCalls(jsonText);
         if (!tool_resp.empty()) {
+            _in_progress_continuation_count = 0;
             _ws.sendText(tool_resp);
         }
     }
@@ -622,7 +635,18 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
         if (deserializeJson(doc, jsonText) == DeserializationError::Ok) {
             JsonObject sc = doc["serverContent"].as<JsonObject>();
             if (!sc.isNull()) {
-                if (sc["interrupted"] == true) {
+                const bool is_interrupted   = (sc["interrupted"] == true);
+                const bool is_turn_complete = (sc["turnComplete"] == true);
+                const bool is_gen_complete  = (sc["generationComplete"] == true);
+
+                if (!sc["modelTurn"].isNull() && !is_turn_complete && !is_gen_complete && !is_interrupted) {
+                    _server_turn_finished = false;
+                }
+
+                if (is_interrupted) {
+                    _server_turn_finished           = true;
+                    _ignore_current_turn_audio      = false;
+                    _in_progress_continuation_count = 0;
                     GetHAL().audioClearStream();
                     if (!_ptt_active.load()) {
                         _state = SessionState::Ready;
@@ -635,26 +659,37 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
                     appendUserTranscript(in_tx, false);
                 }
 
-                const char* out_tx = sc["outputTranscription"]["text"];
-                if (out_tx != nullptr && out_tx[0] != '\0' && std::strstr(out_tx, "<no speech>") == nullptr) {
-                    appendModelTranscript(out_tx, false);
-                }
+                if (!_ignore_current_turn_audio.load()) {
+                    const char* out_tx = sc["outputTranscription"]["text"];
+                    if (out_tx != nullptr && out_tx[0] != '\0' && std::strstr(out_tx, "<no speech>") == nullptr) {
+                        appendModelTranscript(out_tx, false);
+                    }
 
-                JsonArray parts = sc["modelTurn"]["parts"].as<JsonArray>();
-                if (!parts.isNull()) {
-                    for (JsonObject part : parts) {
-                        if (part["thought"] == true) continue;
-                        const char* t = part["text"];
-                        if (t != nullptr && t[0] != '\0' && std::strstr(t, "<no speech>") == nullptr) {
-                            appendModelTranscript(t, false);
+                    JsonArray parts = sc["modelTurn"]["parts"].as<JsonArray>();
+                    if (!parts.isNull()) {
+                        for (JsonObject part : parts) {
+                            if (part["thought"] == true) continue;
+                            const char* t = part["text"];
+                            if (t != nullptr && t[0] != '\0' && std::strstr(t, "<no speech>") == nullptr) {
+                                appendModelTranscript(t, false);
+                            }
                         }
                     }
                 }
 
-                if (sc["turnComplete"] == true) {
-                    const char* status = sc["interactionStatus"];
-                    if (status != nullptr && std::strcmp(status, "IN_PROGRESS") == 0) {
+                if (is_turn_complete || is_gen_complete) {
+                    _server_turn_finished = true;
+                    const char* status    = sc["interactionStatus"];
+                    const bool should_continue_stage2 =
+                        is_turn_complete && status != nullptr && std::strcmp(status, "IN_PROGRESS") == 0 &&
+                        _in_progress_continuation_count < 3 && !_ptt_active.load() &&
+                        !_ignore_current_turn_audio.load();
+
+                    if (should_continue_stage2) {
+                        _in_progress_continuation_count++;
                         _ws.sendText(R"({"clientContent":{"turnComplete":true}})");
+                    } else {
+                        _ignore_current_turn_audio = false;
                     }
                 }
             }
@@ -723,6 +758,7 @@ void GeminiLiveClient::taskLoop()
 
         // Handle PTT state transitions
         if (_ptt_just_started.exchange(false)) {
+            _in_progress_continuation_count = 0;
             appendUserTranscript("", true);
             appendModelTranscript("", true);
         }
@@ -730,8 +766,9 @@ void GeminiLiveClient::taskLoop()
         if (_ptt_active.load() && _setup_complete.load()) {
             std::vector<int16_t> pcm16k;
             if (GetHAL().audioRecordStream16k(pcm16k, 60, 32.0f) && !pcm16k.empty()) {
-                const auto* raw_bytes   = reinterpret_cast<const uint8_t*>(pcm16k.data());
-                const std::size_t nbyte = pcm16k.size() * sizeof(int16_t);
+                _ignore_current_turn_audio = false;
+                const auto* raw_bytes      = reinterpret_cast<const uint8_t*>(pcm16k.data());
+                const std::size_t nbyte    = pcm16k.size() * sizeof(int16_t);
                 const bool is_google =
                     _config.wsUrl.find("generativelanguage.googleapis.com") != std::string::npos;
 
@@ -750,16 +787,29 @@ void GeminiLiveClient::taskLoop()
             _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
         }
 
-        // Poll incoming frames
-        _ws.poll(
-            _ptt_active.load() ? 5 : 25,
-            [this](const std::string& txt) { handleServerJson(txt); },
-            [this](const uint8_t* bin, std::size_t len) { handleServerBinaryPcm(bin, len); },
-            [this](const std::string& err) {
-                mclog::tagWarn(_tag, "WS error: {}", err);
-                setStatusText("Disconnected: " + err);
-                _state = SessionState::Error;
-            });
+        // Drain incoming frames: use initial timeout, then 0ms to flush any queued WebSocket frames
+        for (int frame_idx = 0; frame_idx < 12 && _ws.isConnected(); ++frame_idx) {
+            bool got_frame = false;
+            int wait_ms    = (frame_idx == 0) ? (_ptt_active.load() ? 2 : 15) : 0;
+            bool ok        = _ws.poll(
+                wait_ms,
+                [this, &got_frame](const std::string& txt) {
+                    got_frame = true;
+                    handleServerJson(txt);
+                },
+                [this, &got_frame](const uint8_t* bin, std::size_t len) {
+                    got_frame = true;
+                    handleServerBinaryPcm(bin, len);
+                },
+                [this](const std::string& err) {
+                    mclog::tagWarn(_tag, "WS error: {}", err);
+                    setStatusText("Disconnected: " + err);
+                    _state = SessionState::Error;
+                });
+            if (!ok || !got_frame) {
+                break;
+            }
+        }
 
         // Update state from Speaking -> Ready once speaker buffer drains
         if (_state.load() == SessionState::Speaking && !GetHAL().isAudioPlaying() &&
