@@ -30,7 +30,10 @@ permissions:
 jobs:
   bump-version:
     name: Bump Firmware Version
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && !startsWith(github.event.head_commit.message, 'chore: bump version to ')
+    if: >
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      !startsWith(github.event.head_commit.message, 'chore: bump version to ')
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
