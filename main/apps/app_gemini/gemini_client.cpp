@@ -596,21 +596,25 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
     }
 
     // Fast path for large inlineData audio chunks in standard JSON mode without blowing up DOM memory
-    const std::size_t inline_pos = jsonText.find("\"inlineData\"");
-    if (inline_pos != std::string::npos && !_ptt_active.load() && !_ignore_current_turn_audio.load()) {
+    std::size_t inline_pos = jsonText.find("\"inlineData\"");
+    while (inline_pos != std::string::npos && !_ptt_active.load() && !_ignore_current_turn_audio.load()) {
         const std::size_t data_key = jsonText.find("\"data\"", inline_pos);
-        if (data_key != std::string::npos) {
-            const std::size_t q1 = jsonText.find('"', data_key + 6);
-            if (q1 != std::string::npos) {
-                const std::size_t q2 = jsonText.find('"', q1 + 1);
-                if (q2 != std::string::npos && q2 > q1 + 1) {
-                    std::vector<uint8_t> pcm_bytes;
-                    if (decode_base64_bytes(jsonText.data() + q1 + 1, q2 - (q1 + 1), pcm_bytes)) {
-                        handleServerBinaryPcm(pcm_bytes.data(), pcm_bytes.size());
-                    }
-                }
-            }
+        if (data_key == std::string::npos) {
+            break;
         }
+        const std::size_t q1 = jsonText.find('"', data_key + 6);
+        if (q1 == std::string::npos) {
+            break;
+        }
+        const std::size_t q2 = jsonText.find('"', q1 + 1);
+        if (q2 == std::string::npos || q2 <= q1 + 1) {
+            break;
+        }
+        std::vector<uint8_t> pcm_bytes;
+        if (decode_base64_bytes(jsonText.data() + q1 + 1, q2 - (q1 + 1), pcm_bytes)) {
+            handleServerBinaryPcm(pcm_bytes.data(), pcm_bytes.size());
+        }
+        inline_pos = jsonText.find("\"inlineData\"", q2);
     }
 
     if (jsonText.find("\"setupComplete\"") != std::string::npos) {
@@ -790,7 +794,16 @@ void GeminiLiveClient::taskLoop()
         }
 
         if (_ptt_just_ended.exchange(false) && _setup_complete.load()) {
+            _ignore_current_turn_audio = false;
             _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
+        }
+
+        // Flow control backpressure:
+        // If the speaker already has > 10 seconds of unplayed speech queued, pause polling
+        // to let the buffer drain and let TCP flow control throttle the server stream.
+        if (!_ptt_active.load() && GetHAL().audioGetStreamQueuedMs() > 10000) {
+            vTaskDelay(pdMS_TO_TICKS(25));
+            continue;
         }
 
         // Drain incoming frames: use initial timeout, then 0ms to flush any queued WebSocket frames

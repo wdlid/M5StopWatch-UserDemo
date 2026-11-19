@@ -34,8 +34,8 @@ public:
     static constexpr int sample_rate       = 44100;
     static constexpr int spectrum_fft_size = 512;
     static constexpr int spectrum_hop_size = 256;
-    // PSRAM streaming ring buffer capacity in samples (~6 seconds at 44.1kHz = 264,600 samples)
-    static constexpr std::size_t stream_ring_capacity = 264600;
+    // PSRAM streaming ring buffer capacity in samples (~25 seconds at 44.1kHz = 1,102,500 samples)
+    static constexpr std::size_t stream_ring_capacity = 1102500;
 
     void init(i2c_master_bus_handle_t i2c_bus)
     {
@@ -45,8 +45,15 @@ public:
         _stream_ring = static_cast<int16_t*>(
             heap_caps_malloc(stream_ring_capacity * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (_stream_ring == nullptr) {
-            _stream_ring = static_cast<int16_t*>(malloc(32768 * sizeof(int16_t)));
-            _stream_capacity = _stream_ring ? 32768 : 0;
+            static constexpr std::size_t fallback_capacity = 441000;  // ~10 seconds
+            _stream_ring = static_cast<int16_t*>(
+                heap_caps_malloc(fallback_capacity * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (_stream_ring != nullptr) {
+                _stream_capacity = fallback_capacity;
+            } else {
+                _stream_ring     = static_cast<int16_t*>(malloc(32768 * sizeof(int16_t)));
+                _stream_capacity = _stream_ring ? 32768 : 0;
+            }
         } else {
             _stream_capacity = stream_ring_capacity;
         }
@@ -223,7 +230,11 @@ public:
         std::size_t out_samples = 0;
         bool trigger_task       = false;
         {
-            std::lock_guard<std::mutex> lock(_play_mutex);
+            std::unique_lock<std::mutex> lock(_play_mutex);
+            if (_stream_abort_req) {
+                return;
+            }
+
             const bool starting_fresh = (_stream_count == 0 && !_is_playing && !_stream_active && !_stream_has_prev);
             if (starting_fresh) {
                 _resample_pos    = 0.0f;
@@ -263,16 +274,23 @@ public:
                 sum_sq += static_cast<float>(sample_val) * static_cast<float>(sample_val);
                 out_samples++;
 
-                if (_stream_count < _stream_capacity) {
-                    _stream_ring[_stream_write_pos] = sample_val;
-                    _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
-                    _stream_count++;
-                } else {
-                    // Ring buffer full: overwrite oldest sample
-                    _stream_ring[_stream_write_pos] = sample_val;
-                    _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
-                    _stream_read_pos                = (_stream_read_pos + 1) % _stream_capacity;
+                // Bounded buffer flow control: if ring buffer is full, wait for audio playback task to consume samples.
+                // NEVER overwrite unplayed samples or advance read pointer, which causes fast-forward/skipping distortion!
+                while (_stream_count >= _stream_capacity && !_stream_abort_req) {
+                    _is_playing    = true;
+                    _stream_active = true;
+                    xTaskNotifyGive(_task_handle);
+                    lock.unlock();
+                    vTaskDelay(pdMS_TO_TICKS(12));
+                    lock.lock();
                 }
+                if (_stream_abort_req) {
+                    return;
+                }
+
+                _stream_ring[_stream_write_pos] = sample_val;
+                _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
+                _stream_count++;
 
                 pos += step;
             }
@@ -281,8 +299,8 @@ public:
             _prev_src_sample = samples[count - 1];
             _stream_has_prev = true;
 
-            // Pre-buffering jitter filter: accumulate ~320ms before starting playback to absorb initial network jitter
-            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.32f);
+            // Pre-buffering jitter filter: accumulate ~120ms before starting playback to absorb initial network jitter
+            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.12f);
             if (!_stream_active) {
                 if (!_stream_prebuffering) {
                     _stream_prebuffering    = true;
@@ -290,7 +308,7 @@ public:
                 }
                 const uint32_t elapsed_ms =
                     (xTaskGetTickCount() - _stream_prebuffer_start) * portTICK_PERIOD_MS;
-                if (_stream_count >= PREBUFFER_SAMPLES || elapsed_ms >= 380) {
+                if (_stream_count >= PREBUFFER_SAMPLES || elapsed_ms >= 150) {
                     _stream_prebuffering = false;
                     _stream_active       = true;
                     _is_playing          = true;
@@ -435,6 +453,7 @@ private:
                 std::size_t popped    = 0;
                 bool abort_requested  = false;
 
+                bool need_prebuffer_wait = false;
                 {
                     std::lock_guard<std::mutex> lock(_play_mutex);
                     if (_stream_abort_req) {
@@ -448,16 +467,35 @@ private:
                         has_oneshot = true;
                         _is_playing = true;
                     } else if (_stream_count > 0 && _stream_ring != nullptr) {
-                        popped = std::min<std::size_t>(_stream_count, CHUNK_SAMPLES);
-                        for (std::size_t i = 0; i < popped; ++i) {
-                            stream_chunk[i] = _stream_ring[_stream_read_pos];
-                            _stream_read_pos = (_stream_read_pos + 1) % _stream_capacity;
+                        if (_stream_prebuffering) {
+                            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.12f);
+                            const uint32_t elapsed_ms =
+                                (xTaskGetTickCount() - _stream_prebuffer_start) * portTICK_PERIOD_MS;
+                            if (_stream_count < PREBUFFER_SAMPLES && elapsed_ms < 150) {
+                                need_prebuffer_wait = true;
+                            } else {
+                                _stream_prebuffering = false;
+                                _stream_active       = true;
+                            }
                         }
-                        _stream_count -= popped;
-                        _is_playing = true;
+
+                        if (!need_prebuffer_wait) {
+                            popped = std::min<std::size_t>(_stream_count, CHUNK_SAMPLES);
+                            for (std::size_t i = 0; i < popped; ++i) {
+                                stream_chunk[i]  = _stream_ring[_stream_read_pos];
+                                _stream_read_pos = (_stream_read_pos + 1) % _stream_capacity;
+                            }
+                            _stream_count -= popped;
+                            _is_playing = true;
+                        }
                     } else {
                         _is_playing = false;
                     }
+                }
+
+                if (need_prebuffer_wait) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;
                 }
 
                 if (abort_requested) {
@@ -531,7 +569,8 @@ private:
                         if (_stream_abort_req) {
                             break;
                         }
-                        if (_stream_count > 0 || !_audio_data.empty()) {
+                        if (_stream_count >= static_cast<std::size_t>(sample_rate * 0.06f) || !_audio_data.empty() ||
+                            (_stream_count > 0 && wait_idx > 10)) {
                             received_more = true;
                             break;
                         }
