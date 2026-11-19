@@ -8,6 +8,6 @@
 
 namespace common {
 
-inline constexpr std::string_view FirmwareVersion = "V0.13";
+inline constexpr std::string_view FirmwareVersion = "V0.14";
 
 }
