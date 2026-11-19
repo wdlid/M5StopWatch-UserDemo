@@ -9,6 +9,7 @@
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <smooth_lvgl.hpp>
+#include <string>
 #include <string_view>
 #include <cstdint>
 #include <memory>
@@ -19,6 +20,7 @@ namespace view {
 class ArcTopClock : public uitk::lvgl_cpp::Widget<lv_obj_create> {
 public:
     using Widget::Widget;
+    ~ArcTopClock();
 
     bool showFullDate       = false;
     uint32_t color          = 0xFFFFFF;
@@ -30,6 +32,8 @@ public:
 
 protected:
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Label>> labels;
+    lv_obj_t* _arc_label       = nullptr;
+    std::string _last_arc_text = "";
     uint32_t update_time_count = 0;
 
     void set_clock_to(const std::string_view text);

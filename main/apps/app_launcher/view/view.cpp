@@ -31,6 +31,7 @@ public:
 
         _panel = std::make_unique<Container>(parent);
         _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _panel->removeFlag(LV_OBJ_FLAG_CLICKABLE);
         _panel->addFlag(LV_OBJ_FLAG_FLOATING);
         _panel->setAlign(LV_ALIGN_CENTER);
         _panel->setPadding(0, 0, 24, 24);
@@ -46,6 +47,7 @@ public:
             _dots.back()->setPos(i * dot_gap - (pageNum - 1) * dot_gap / 2, 0);
             _dots.back()->setBgColor(lv_color_hex(0xFFFFFF));
             _dots.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+            _dots.back()->removeFlag(LV_OBJ_FLAG_CLICKABLE);
             _dots.back()->setRadius(LV_RADIUS_CIRCLE);
             _dots.back()->setSize(dot_size, dot_size);
             _dots.back()->setBorderWidth(0);
@@ -126,6 +128,8 @@ public:
         _label->setTextFont(&MontserratSemiBold26);
         _label->setAlign(LV_ALIGN_CENTER);
         _label->addFlag(LV_OBJ_FLAG_FLOATING);
+        _label->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+        _label->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
         _label->setOpa(255);
 
         jumpTo(0);
@@ -208,6 +212,10 @@ static std::unique_ptr<DynamicIconLabel> _dynamic_icon_label;
 
 LauncherView::~LauncherView()
 {
+    if (GetHAL().lvTouchpad) {
+        lv_indev_set_scroll_limit(GetHAL().lvTouchpad, 10);
+    }
+    _clock.reset();
     _icon_images.clear();
     _icon_panels.clear();
     _lr_indicators_images.clear();
@@ -223,6 +231,10 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     _key_manager = std::make_unique<input::KeyManager>();
 
+    if (GetHAL().lvTouchpad) {
+        lv_indev_set_scroll_limit(GetHAL().lvTouchpad, 6);
+    }
+
     /* ------------------------------ Screen setup ------------------------------ */
     ScreenActive screen;
     screen.removeFlag(LV_OBJ_FLAG_SCROLLABLE);
@@ -233,9 +245,11 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _panel->setSize(466, 466);
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
+    _panel->setScrollDir(LV_DIR_HOR);
     _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
     _panel->setBgColor(lv_color_hex(0x000000));
     _panel->addFlag(LV_OBJ_FLAG_SCROLL_ONE);
+    _panel->removeFlag(LV_OBJ_FLAG_SCROLL_ELASTIC);
     _panel->setPaddingAll(0);
     lv_obj_set_scroll_snap_x(_panel->get(), LV_SCROLL_SNAP_CENTER);
 
@@ -255,14 +269,22 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
             _icon_panels.back()->setPos(icon_x, icon_y);
             _icon_panels.back()->setBorderWidth(0);
             _icon_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+            _icon_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
             _icon_panels.back()->setBgOpa(0);
 
             // Icon click callback
             auto app_id = props.appID;
-            auto pos_x  = icon_x;
-            _icon_panels.back()->onClick().connect([&, app_id, pos_x]() {
+            _icon_panels.back()->onClick().connect([this, app_id]() {
+                if (lv_obj_is_scrolling(_panel->get())) {
+                    return;
+                }
+                if (auto* indev = lv_indev_active()) {
+                    if (lv_indev_get_scroll_obj(indev) != nullptr) {
+                        return;
+                    }
+                }
                 _clicked_app_id          = app_id;
-                _last_clicked_icon_pos_x = pos_x;
+                _last_clicked_icon_pos_x = _panel->getScrollX();
             });
 
             // Keep track of data for helpers
@@ -294,8 +316,13 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _lr_indicator_panels.back()->setBorderWidth(0);
     _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_FLOATING);
     _lr_indicator_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
     _lr_indicator_panels.back()->setBgOpa(0);
-    _lr_indicator_panels.back()->onClick().connect([this]() { scroll_to_nearby_icon(-1); });
+    _lr_indicator_panels.back()->onClick().connect([this]() {
+        if (!lv_obj_is_scrolling(_panel->get())) {
+            scroll_to_nearby_icon(-1);
+        }
+    });
 
     _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
     _lr_indicators_images.back()->setSrc(&icon_indicator_left);
@@ -309,8 +336,13 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _lr_indicator_panels.back()->setBorderWidth(0);
     _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_FLOATING);
     _lr_indicator_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
     _lr_indicator_panels.back()->setBgOpa(0);
-    _lr_indicator_panels.back()->onClick().connect([this]() { scroll_to_nearby_icon(1); });
+    _lr_indicator_panels.back()->onClick().connect([this]() {
+        if (!lv_obj_is_scrolling(_panel->get())) {
+            scroll_to_nearby_icon(1);
+        }
+    });
 
     _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
     _lr_indicators_images.back()->setSrc(&icon_indicator_right);
@@ -318,14 +350,14 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     /* ------------------------------ Page indicator ---------------------------- */
     _page_indicator = std::make_unique<PageIndicator>();
-    _page_indicator->init(appPorps.size(), _icon_gap, _panel->get(), 0, 200);
+    _page_indicator->init(appPorps.size(), _icon_gap, lv_screen_active(), 0, 200);
 
     /* --------------------------- Dynamic icon label --------------------------- */
     _dynamic_icon_label = std::make_unique<DynamicIconLabel>();
-    _dynamic_icon_label->init(icon_label_texts, _icon_gap, _panel->get());
+    _dynamic_icon_label->init(icon_label_texts, _icon_gap, lv_screen_active());
 
     /* ---------------------------------- Clock --------------------------------- */
-    _clock = std::make_unique<view::ArcTopClock>(_panel->get());
+    _clock = std::make_unique<view::ArcTopClock>(lv_screen_active());
     _clock->showFullDate = true;
     _clock->init();
     _clock->align(LV_ALIGN_CENTER, 0, 0);
@@ -352,8 +384,16 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     // }
 
     if (_last_clicked_icon_pos_x != -1) {
-        // Just restore where they left off, it should be in a valid range
-        restore_icon_pos_x       = _last_clicked_icon_pos_x;
+        int app_count = static_cast<int>(appPorps.size());
+        if (app_count > 0) {
+            int app_index = ((_last_clicked_icon_pos_x + _icon_gap / 2) / _icon_gap) % app_count;
+            if (app_index < 0) {
+                app_index += app_count;
+            }
+            restore_icon_pos_x = (base_offset_rounds + app_index) * _icon_gap;
+        } else {
+            restore_icon_pos_x = default_start_x;
+        }
         need_restore             = true;
         _last_clicked_icon_pos_x = -1;
     } else {
@@ -403,6 +443,8 @@ void LauncherView::update()
 
 void LauncherView::scroll_to_nearby_icon(int direction)
 {
+    handle_scroll_in_loop(true);
+
     auto current_scroll_x = _panel->getScrollX();
     int current_index     = (current_scroll_x + _icon_gap / 2) / _icon_gap;
     int target_index      = current_index + direction;
@@ -442,7 +484,7 @@ void LauncherView::handle_state_normal()
     }
 }
 
-void LauncherView::handle_scroll_in_loop()
+void LauncherView::handle_scroll_in_loop(bool force)
 {
     // We get total size from underlying icons count / copies
     int total_icons   = _icon_panels.size();
@@ -460,21 +502,26 @@ void LauncherView::handle_scroll_in_loop()
     int left_trigger_limit  = 1 * set_width_px;
     int right_trigger_limit = 2 * set_width_px - _icon_gap;
 
-    // Wrap-around Logic
-    // Only perform teleport if we are NOT in an automated scroll animation
-    // (To avoid interrupting the snap/scroll-to animation which would leave us stuck between icons)
-    // However, if the user is manually dragging (PRESSED), we MUST teleport to allow infinite drag.
-    bool is_auto_scrolling = lv_obj_is_scrolling(_panel->get()) && !lv_obj_has_state(_panel->get(), LV_STATE_PRESSED);
-
-    if (!is_auto_scrolling) {
-        if (current_scroll_x < left_trigger_limit) {
-            // Too far left (Set 0), warp right to Set 1
-            // scrollBy(-val) increases scroll_x
-            _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
-        } else if (current_scroll_x > right_trigger_limit) {
-            // Too far right (Set 2), warp left to Set 1
-            // scrollBy(+val) decreases scroll_x
-            _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);
+    // Never teleport while LVGL is actively scrolling or while touch is pressed;
+    // altering scroll coordinates mid-gesture corrupts LVGL's scroll_area limits and throw momentum.
+    if (!force) {
+        if (lv_obj_is_scrolling(_panel->get())) {
+            return;
         }
+        if (auto* indev = GetHAL().lvTouchpad) {
+            if (lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+                return;
+            }
+        }
+    }
+
+    if (current_scroll_x < left_trigger_limit) {
+        // Too far left (Set 0), warp right to Set 1
+        // scrollBy(-val) increases scroll_x
+        _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
+    } else if (current_scroll_x > right_trigger_limit) {
+        // Too far right (Set 2), warp left to Set 1
+        // scrollBy(+val) decreases scroll_x
+        _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);
     }
 }

@@ -19,6 +19,14 @@ static const std::vector<int> _label_rotation_map = {-100, -46, 0, 32, 84};
 static const std::vector<int> _label_x_map        = {3, 3, 1, 4, 4};
 static const std::vector<int> _label_y_map        = {0, 0, -2, -1, -1};
 
+ArcTopClock::~ArcTopClock()
+{
+    if (_arc_label && lv_obj_is_valid(_arc_label)) {
+        lv_obj_delete(_arc_label);
+    }
+    _arc_label = nullptr;
+}
+
 void ArcTopClock::init()
 {
     if (showFullDate) {
@@ -30,32 +38,32 @@ void ArcTopClock::init()
         removeFlag(LV_OBJ_FLAG_SCROLLABLE);
         removeFlag(LV_OBJ_FLAG_CLICKABLE);
         addFlag(LV_OBJ_FLAG_EVENT_BUBBLE);
+        addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
 
-        const int total_chars = 20;
-        const int center_idx  = 13;  // ':' in "YYYY/MM/DD HH:MM Day"
-        const float r         = 214.0f;
-        const float step_deg  = 3.85f;
-
-        labels.resize(total_chars);
-        for (int i = 0; i < total_chars; i++) {
-            labels[i] = std::make_unique<Label>(get());
-            labels[i]->setText(" ");
-            labels[i]->setTextFont(&lv_font_maple_mono_medium_24);
-            labels[i]->setTextColor(lv_color_hex(color));
-            labels[i]->setPaddingAll(0);
-            labels[i]->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-            labels[i]->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-
-            float deg = (i - center_idx) * step_deg;
-            float rad = deg * static_cast<float>(M_PI / 180.0);
-            int32_t offset_x = static_cast<int32_t>(std::round(r * std::sin(rad)));
-            int32_t offset_y = static_cast<int32_t>(std::round(-r * std::cos(rad)));
-            int16_t rotation = static_cast<int16_t>(std::round(deg * 10.0f));
-
-            labels[i]->setTransformPivot(LV_PCT(50), LV_PCT(50));
-            labels[i]->align(LV_ALIGN_CENTER, offset_x, offset_y);
-            labels[i]->setRotation(rotation);
-        }
+        _arc_label = lv_arclabel_create(get());
+        lv_obj_set_size(_arc_label, 466, 466);
+        lv_obj_center(_arc_label);
+        lv_arclabel_set_radius(_arc_label, 214);
+        // Center the 20-char string around 256.5 deg so index 13 (':') lands at 270 deg (top center)
+        lv_arclabel_set_angle_start(_arc_label, 196.5f);
+        lv_arclabel_set_angle_size(_arc_label, 120.0f);
+        lv_arclabel_set_dir(_arc_label, LV_ARCLABEL_DIR_CLOCKWISE);
+        lv_arclabel_set_text_horizontal_align(_arc_label, LV_ARCLABEL_TEXT_ALIGN_CENTER);
+        lv_arclabel_set_text_vertical_align(_arc_label, LV_ARCLABEL_TEXT_ALIGN_CENTER);
+        lv_arclabel_set_overflow(_arc_label, LV_ARCLABEL_OVERFLOW_VISIBLE);
+        lv_obj_set_style_text_font(_arc_label, &lv_font_maple_mono_medium_24, LV_PART_MAIN);
+        lv_obj_set_style_text_color(_arc_label, lv_color_hex(color), LV_PART_MAIN);
+        lv_obj_remove_flag(_arc_label, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(_arc_label, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(
+            _arc_label,
+            [](lv_event_t* e) {
+                auto** ptr = static_cast<lv_obj_t**>(lv_event_get_user_data(e));
+                if (ptr) {
+                    *ptr = nullptr;
+                }
+            },
+            LV_EVENT_DELETE, &_arc_label);
     } else {
         setSize(114, 36);
         setBorderWidth(0);
@@ -103,6 +111,20 @@ void ArcTopClock::update(bool force)
 
 void ArcTopClock::set_clock_to(const std::string_view text)
 {
+    if (_arc_label) {
+        std::string transformed(text);
+        for (char& ch : transformed) {
+            if (ch == '0') {
+                ch = 'O';
+            }
+        }
+        if (transformed != _last_arc_text) {
+            _last_arc_text = std::move(transformed);
+            lv_arclabel_set_text(_arc_label, _last_arc_text.c_str());
+        }
+        return;
+    }
+
     const int count = std::min((int)text.size(), (int)labels.size());
     for (int i = 0; i < count; i++) {
         const char target_char = (text[i] == '0') ? 'O' : text[i];

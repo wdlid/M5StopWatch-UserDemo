@@ -50,7 +50,7 @@ private:
     void scroll_to_nearby_icon(int direction);
     void handle_state_startup();
     void handle_state_normal();
-    void handle_scroll_in_loop();
+    void handle_scroll_in_loop(bool force = false);
 };
 
 /**
