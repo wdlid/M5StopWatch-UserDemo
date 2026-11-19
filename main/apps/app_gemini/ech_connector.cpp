@@ -30,12 +30,40 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 namespace gemini {
 
 namespace {
 
 constexpr const char* _tag = "ECH-WS";
+
+struct EndpointCache {
+    std::mutex mutex;
+    std::string host;
+    std::string dohUrl1;
+    std::string dohUrl2;
+    std::string connectIp;
+    std::string echConfigDomain;
+    std::string staticEchConfigB64;
+    bool dohEnabled = false;
+    bool echEnabled = false;
+    uint32_t resolvedAtMs = 0;
+    ResolvedEndpoint endpoint;
+    std::string preferredIp;
+    std::string preferredSni;
+};
+
+EndpointCache& get_endpoint_cache()
+{
+    static EndpointCache cache;
+    return cache;
+}
+
+uint32_t now_ms()
+{
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
 
 constexpr uint16_t DNS_TYPE_A     = 1;
 constexpr uint16_t DNS_TYPE_HTTPS = 65;
@@ -199,30 +227,30 @@ esp_err_t doh_http_event_handler(esp_http_client_event_t* evt)
     return ESP_OK;
 }
 
-bool doh_query_single(const std::string& dohUrl, const std::string& domain, uint16_t qtype, DnsLookupResult& outResult)
+struct DohBatchQuery {
+    std::string domain;
+    uint16_t qtype = DNS_TYPE_A;
+    DnsLookupResult* outResult = nullptr;
+};
+
+bool doh_query_batch(const std::string& dohUrl, std::vector<DohBatchQuery>& queries)
 {
-    if (dohUrl.empty()) return false;
+    if (dohUrl.empty() || queries.empty()) return false;
     if (!GetHAL().isWifiConnected() || GetHAL().isScreenSleeping()) {
         return false;
     }
-    std::vector<uint8_t> query;
-    if (!buildDnsQuery(domain, qtype, query)) {
-        return false;
-    }
-
-    std::string b64url = base64url_encode_no_pad(query.data(), query.size());
-    std::string full_url = dohUrl + (dohUrl.find('?') != std::string::npos ? "&dns=" : "?dns=") + b64url;
 
     HttpBuffer resp_buf;
     esp_http_client_config_t config = {};
-    config.url                      = full_url.c_str();
+    config.url                      = dohUrl.c_str();
     config.method                   = HTTP_METHOD_GET;
-    config.timeout_ms               = 4000;
+    config.timeout_ms               = 2500;
     config.crt_bundle_attach        = esp_crt_bundle_attach;
     config.event_handler            = doh_http_event_handler;
     config.user_data                = &resp_buf;
     config.buffer_size              = 1024;
     config.buffer_size_tx           = 1024;
+    config.keep_alive_enable        = true;
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == nullptr) {
@@ -230,16 +258,36 @@ bool doh_query_single(const std::string& dohUrl, const std::string& domain, uint
     }
 
     esp_http_client_set_header(client, "Accept", "application/dns-message");
-    esp_err_t err   = esp_http_client_perform(client);
-    int status_code = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+    bool any_ok = false;
 
-    if (err == ESP_OK && status_code >= 200 && status_code < 300 && !resp_buf.data.empty()) {
-        if (parseDnsResponse(resp_buf.data.data(), resp_buf.data.size(), outResult)) {
-            return true;
+    for (auto& q : queries) {
+        if (!GetHAL().isWifiConnected() || GetHAL().isScreenSleeping()) {
+            break;
+        }
+        std::vector<uint8_t> query_pkt;
+        if (!buildDnsQuery(q.domain, q.qtype, query_pkt)) {
+            continue;
+        }
+
+        std::string b64url   = base64url_encode_no_pad(query_pkt.data(), query_pkt.size());
+        std::string full_url = dohUrl + (dohUrl.find('?') != std::string::npos ? "&dns=" : "?dns=") + b64url;
+
+        resp_buf.data.clear();
+        esp_http_client_set_url(client, full_url.c_str());
+        esp_err_t err   = esp_http_client_perform(client);
+        int status_code = esp_http_client_get_status_code(client);
+
+        if (err == ESP_OK && status_code >= 200 && status_code < 300 && !resp_buf.data.empty()) {
+            if (q.outResult && parseDnsResponse(resp_buf.data.data(), resp_buf.data.size(), *q.outResult)) {
+                any_ok = true;
+            }
+        } else {
+            break;
         }
     }
-    return false;
+
+    esp_http_client_cleanup(client);
+    return any_ok;
 }
 
 bool parse_ws_url(const std::string& url,
@@ -469,6 +517,29 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
     std::string host = targetHost;
     const bool is_google = is_google_direct_domain(host);
 
+    // Check in-memory endpoint cache (valid for 10 minutes while config matches)
+    {
+        auto& cache = get_endpoint_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const uint32_t now = now_ms();
+        if (cache.resolvedAtMs != 0 && (now - cache.resolvedAtMs) < 600000 &&
+            cache.host == host && cache.dohEnabled == opts.dohEnabled &&
+            cache.echEnabled == opts.echEnabled && cache.dohUrl1 == opts.dohUrl1 &&
+            cache.dohUrl2 == opts.dohUrl2 && cache.connectIp == opts.connectIp &&
+            cache.echConfigDomain == opts.echConfigDomain &&
+            cache.staticEchConfigB64 == opts.staticEchConfigB64 &&
+            !cache.endpoint.candidateIps.empty()) {
+            outEndpoint = cache.endpoint;
+            if (!cache.preferredIp.empty()) {
+                auto it = std::find(outEndpoint.candidateIps.begin(), outEndpoint.candidateIps.end(), cache.preferredIp);
+                if (it != outEndpoint.candidateIps.end() && it != outEndpoint.candidateIps.begin()) {
+                    std::rotate(outEndpoint.candidateIps.begin(), it, it + 1);
+                }
+            }
+            return true;
+        }
+    }
+
     // 1. Check explicit connectIp override
     if (!opts.connectIp.empty()) {
         outEndpoint.candidateIps.push_back(opts.connectIp);
@@ -491,39 +562,39 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         doh_urls.push_back("https://edge.1molchuan.top/plus");
     }
 
+    // Only perform DoH lookup if we don't already have a static connectIp override
     DnsLookupResult host_lookup;
-    if (opts.dohEnabled && (outEndpoint.candidateIps.empty() || (opts.echEnabled && outEndpoint.echConfigList.empty()))) {
+    if (opts.dohEnabled && outEndpoint.candidateIps.empty()) {
+        std::vector<DohBatchQuery> batch;
+        batch.push_back({host, DNS_TYPE_A, &host_lookup});
+        if (opts.echEnabled && outEndpoint.echConfigList.empty()) {
+            batch.push_back({host, DNS_TYPE_HTTPS, &host_lookup});
+        }
+
         for (const auto& url : doh_urls) {
-            if (doh_query_single(url, host, DNS_TYPE_A, host_lookup)) {
+            if (doh_query_batch(url, batch)) {
                 break;
             }
         }
-        if (opts.echEnabled && outEndpoint.echConfigList.empty()) {
-            for (const auto& url : doh_urls) {
-                if (doh_query_single(url, host, DNS_TYPE_HTTPS, host_lookup)) {
-                    break;
-                }
-            }
-            if (!host_lookup.echConfigList.empty()) {
-                outEndpoint.echConfigList = host_lookup.echConfigList;
-                outEndpoint.publicName    = parse_ech_public_name(outEndpoint.echConfigList);
-            }
+
+        if (!host_lookup.echConfigList.empty()) {
+            outEndpoint.echConfigList = host_lookup.echConfigList;
+            outEndpoint.publicName    = parse_ech_public_name(outEndpoint.echConfigList);
         }
     }
 
-    // Query cloudflare-ech.com if target is a Cloudflare Worker / domain without direct HTTPS ECH record
+    // Query cloudflare-ech.com only if we still have no candidate IPs for a non-Google domain
     DnsLookupResult cf_lookup;
     std::string ech_domain = opts.echConfigDomain.empty() ? "cloudflare-ech.com" : opts.echConfigDomain;
     if (!is_google && opts.dohEnabled &&
-        ((opts.echEnabled && outEndpoint.echConfigList.empty()) ||
-         (outEndpoint.candidateIps.empty() && host_lookup.ipv4Addrs.empty() && host_lookup.ipv4Hints.empty()))) {
-        for (const auto& url : doh_urls) {
-            if (doh_query_single(url, ech_domain, DNS_TYPE_HTTPS, cf_lookup)) {
-                break;
-            }
+        outEndpoint.candidateIps.empty() && host_lookup.ipv4Addrs.empty() && host_lookup.ipv4Hints.empty()) {
+        std::vector<DohBatchQuery> cf_batch;
+        cf_batch.push_back({ech_domain, DNS_TYPE_A, &cf_lookup});
+        if (opts.echEnabled && outEndpoint.echConfigList.empty()) {
+            cf_batch.push_back({ech_domain, DNS_TYPE_HTTPS, &cf_lookup});
         }
         for (const auto& url : doh_urls) {
-            if (doh_query_single(url, ech_domain, DNS_TYPE_A, cf_lookup)) {
+            if (doh_query_batch(url, cf_batch)) {
                 break;
             }
         }
@@ -540,7 +611,7 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         outEndpoint.echConfigList.assign(
             FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST,
             FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST + sizeof(FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST));
-        outEndpoint.publicName      = "cloudflare-ech.com";
+        outEndpoint.publicName      = ech_domain;
         outEndpoint.echFromFallback = true;
     }
 
@@ -587,6 +658,21 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         for (const char* ip : FALLBACK_CLOUDFLARE_IPS) {
             outEndpoint.candidateIps.emplace_back(ip);
         }
+    }
+
+    if (!outEndpoint.candidateIps.empty()) {
+        auto& cache = get_endpoint_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.host               = host;
+        cache.dohEnabled         = opts.dohEnabled;
+        cache.echEnabled         = opts.echEnabled;
+        cache.dohUrl1            = opts.dohUrl1;
+        cache.dohUrl2            = opts.dohUrl2;
+        cache.connectIp          = opts.connectIp;
+        cache.echConfigDomain    = opts.echConfigDomain;
+        cache.staticEchConfigB64 = opts.staticEchConfigB64;
+        cache.resolvedAtMs       = now_ms();
+        cache.endpoint           = outEndpoint;
     }
 
     return !outEndpoint.candidateIps.empty();
@@ -701,7 +787,7 @@ bool EchWebSocketClient::openTcpSocket(const std::string& ip, uint16_t port, int
     int nodelay = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
-    struct timeval rw_tv = {.tv_sec = 8, .tv_usec = 0};
+    struct timeval rw_tv = {.tv_sec = 4, .tv_usec = 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rw_tv, sizeof(rw_tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &rw_tv, sizeof(rw_tv));
 
@@ -816,7 +902,7 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
             outError = "TLS handshake aborted";
             return false;
         }
-        if ((static_cast<uint32_t>(esp_timer_get_time() / 1000) - start_ms) > 8000) {
+        if ((static_cast<uint32_t>(esp_timer_get_time() / 1000) - start_ms) > 5000) {
             outError = "TLS handshake timed out";
             return false;
         }
@@ -826,7 +912,7 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
             outError = std::string("TLS handshake failed: ") + err_buf;
             return false;
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(1);
     }
 
     return true;
@@ -865,13 +951,16 @@ int EchWebSocketClient::tlsReadExact(uint8_t* buf, std::size_t len, int timeoutM
     }
 
     while (got < len) {
-        if (_is_tls && mbedtls_ssl_get_bytes_avail(&_ssl) == 0 && timeoutMs >= 0) {
+        // Once at least 1 byte of the target read is read, wait up to 4000ms for the remaining bytes
+        // so we never return a partial WebSocket header when timeoutMs == 0
+        int effective_timeout = (got > 0 && timeoutMs < 1000) ? 4000 : timeoutMs;
+        if (_is_tls && mbedtls_ssl_get_bytes_avail(&_ssl) == 0 && effective_timeout >= 0) {
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(_sockfd, &rfds);
             struct timeval tv = {
-                .tv_sec  = timeoutMs / 1000,
-                .tv_usec = (timeoutMs % 1000) * 1000,
+                .tv_sec  = effective_timeout / 1000,
+                .tv_usec = (effective_timeout % 1000) * 1000,
             };
             int sel = select(_sockfd + 1, &rfds, nullptr, nullptr, &tv);
             if (sel == 0) {
@@ -880,13 +969,13 @@ int EchWebSocketClient::tlsReadExact(uint8_t* buf, std::size_t len, int timeoutM
             if (sel < 0) {
                 return -1;
             }
-        } else if (!_is_tls && timeoutMs >= 0) {
+        } else if (!_is_tls && effective_timeout >= 0) {
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(_sockfd, &rfds);
             struct timeval tv = {
-                .tv_sec  = timeoutMs / 1000,
-                .tv_usec = (timeoutMs % 1000) * 1000,
+                .tv_sec  = effective_timeout / 1000,
+                .tv_usec = (effective_timeout % 1000) * 1000,
             };
             int sel = select(_sockfd + 1, &rfds, nullptr, nullptr, &tv);
             if (sel == 0) {
@@ -1043,11 +1132,21 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
     // Determine SNI order:
     // When ECH / outer SNI protection is enabled for a Cloudflare Worker domain (e.g. *.workers.dev),
     // try the public ECH outer name ("cloudflare-ech.com") first so domestic DPI never sees *.workers.dev in plaintext SNI;
-    // if the edge requires direct SNI (e.g. custom domain), automatically fall back to `host`.
+    // if the edge requires direct SNI (e.g. custom domain), automatically fall back to `host` and remember the working SNI.
     std::vector<std::string> sni_candidates;
     if (_is_tls && opts.echEnabled && !is_google && !resolved.publicName.empty() && resolved.publicName != host) {
         sni_candidates.push_back(resolved.publicName);
         sni_candidates.push_back(host);
+        {
+            auto& cache = get_endpoint_cache();
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            if (!cache.preferredSni.empty() && cache.host == host) {
+                auto it = std::find(sni_candidates.begin(), sni_candidates.end(), cache.preferredSni);
+                if (it != sni_candidates.end() && it != sni_candidates.begin()) {
+                    std::rotate(sni_candidates.begin(), it, it + 1);
+                }
+            }
+        }
     } else {
         sni_candidates.push_back(host);
     }
@@ -1061,9 +1160,9 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
             }
 
             mclog::tagInfo(_tag, "Connecting TCP {}:{} (Host={}, SNI={})...", ip, port, host, sni_name);
-            if (!openTcpSocket(ip, port, 4000)) {
+            if (!openTcpSocket(ip, port, 2500)) {
                 outError = "TCP connect timeout to " + ip;
-                continue;
+                break;  // IP unreachable; skip remaining SNI candidates on this IP
             }
 
             if (_is_tls) {
@@ -1087,11 +1186,25 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
                 continue;
             }
 
+            {
+                auto& cache = get_endpoint_cache();
+                std::lock_guard<std::mutex> lock(cache.mutex);
+                cache.preferredIp  = ip;
+                cache.preferredSni = sni_name;
+            }
+
             _connected    = true;
             _connected_ip = ip;
             mclog::tagInfo(_tag, "WebSocket connected via {} (SNI={})", ip, sni_name);
             return true;
         }
+    }
+
+    // All candidate IPs failed; invalidate endpoint cache so next retry refreshes DNS
+    {
+        auto& cache = get_endpoint_cache();
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.resolvedAtMs = 0;
     }
 
     return false;

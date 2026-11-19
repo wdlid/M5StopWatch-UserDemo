@@ -276,6 +276,7 @@ public:
 
     void updateButtonStates();
     void pwr_button_tick();
+    void button_on_sleep();
     void setButtonConfig(ButtonConfig config, bool saveToSettings = false);
     const ButtonConfig& getButtonConfig(bool loadFromSettings = false);
 

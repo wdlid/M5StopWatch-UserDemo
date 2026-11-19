@@ -379,6 +379,7 @@ void Hal::sleepScreen()
         ioe_speaker_enable(false);
     }
     setPowerLed(false);
+    button_on_sleep();
     mclog::tagInfo(_tag, "screen sleep");
 }
 

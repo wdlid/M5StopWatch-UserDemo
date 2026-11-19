@@ -12,6 +12,7 @@
 #include <mooncake_log.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
+#include <esp_wifi.h>
 #include <mbedtls/base64.h>
 
 #include <algorithm>
@@ -239,6 +240,8 @@ void GeminiLiveClient::start(const GeminiConfig& config)
     _state                         = SessionState::Connecting;
     setStatusText("Connecting...");
 
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     xTaskCreate([](void* arg) { static_cast<GeminiLiveClient*>(arg)->taskLoop(); }, "gemini_live", 16 * 1024, this, 5,
                 &_task_handle);
 }
@@ -263,6 +266,7 @@ void GeminiLiveClient::stop()
     }
 
     _ws.disconnect();
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     _state = SessionState::Disconnected;
 }
 
@@ -748,6 +752,8 @@ void GeminiLiveClient::taskLoop()
                 _connected_ip = _ws.connectedIp();
             }
 
+            esp_wifi_set_ps(WIFI_PS_NONE);
+
             setStatusText("Handshaking Gemini Setup...");
             std::string setup_json = buildSetupJson();
             if (!_ws.sendText(setup_json)) {
@@ -787,16 +793,29 @@ void GeminiLiveClient::taskLoop()
             _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
         }
 
-        // Poll incoming frames
-        _ws.poll(
-            _ptt_active.load() ? 5 : 25,
-            [this](const std::string& txt) { handleServerJson(txt); },
-            [this](const uint8_t* bin, std::size_t len) { handleServerBinaryPcm(bin, len); },
-            [this](const std::string& err) {
-                mclog::tagWarn(_tag, "WS error: {}", err);
-                setStatusText("Disconnected: " + err);
-                _state = SessionState::Error;
-            });
+        // Drain incoming frames: use initial timeout, then 0ms to flush any queued WebSocket frames
+        for (int frame_idx = 0; frame_idx < 16 && _ws.isConnected(); ++frame_idx) {
+            bool got_frame = false;
+            int wait_ms    = (frame_idx == 0) ? (_ptt_active.load() ? 2 : 10) : 0;
+            bool ok        = _ws.poll(
+                wait_ms,
+                [this, &got_frame](const std::string& txt) {
+                    got_frame = true;
+                    handleServerJson(txt);
+                },
+                [this, &got_frame](const uint8_t* bin, std::size_t len) {
+                    got_frame = true;
+                    handleServerBinaryPcm(bin, len);
+                },
+                [this](const std::string& err) {
+                    mclog::tagWarn(_tag, "WS error: {}", err);
+                    setStatusText("Disconnected: " + err);
+                    _state = SessionState::Error;
+                });
+            if (!ok || !got_frame) {
+                break;
+            }
+        }
 
         // Update state from Speaking -> Ready once speaker buffer drains
         if (_state.load() == SessionState::Speaking && !GetHAL().isAudioPlaying() &&

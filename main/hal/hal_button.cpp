@@ -51,18 +51,23 @@ void Hal::pwr_button_tick()
     _last_poll = now;
 
     const bool pwr_raw = pmic_get_pwr_btn_state() || !gpio_get_level(BOOT_BUTTON_PIN);
+
+    if (isScreenSleeping()) {
+        if (pwr_raw) {
+            wakeScreen();
+            btnPwr.ignoreUntilRelease();
+            btnPwr.setRawState(now, pwr_raw);
+            pmic_get_double_click_flag();
+        }
+        return;
+    }
+
     btnPwr.setRawState(now, pwr_raw);
 
     auto& config = getButtonConfig();
 
     if (btnPwr.wasPressed()) {
-        if (isScreenSleeping()) {
-            wakeScreen();
-            btnPwr.clearClickCount();
-            return;
-        } else {
-            resetActivityTimer();
-        }
+        resetActivityTimer();
     }
 
     // Long press (>= 2.0s): Power off / 关机
@@ -111,21 +116,59 @@ void Hal::pwr_button_tick()
     }
 }
 
+void Hal::button_on_sleep()
+{
+    btnA.reset();
+    btnB.reset();
+    btnPwr.reset();
+
+    if (!gpio_get_level(USER_BUTTONA_PIN)) {
+        btnA.ignoreUntilRelease();
+    }
+    if (!gpio_get_level(USER_BUTTONB_PIN)) {
+        btnB.ignoreUntilRelease();
+    }
+    if (!gpio_get_level(BOOT_BUTTON_PIN) || pmic_get_pwr_btn_state()) {
+        btnPwr.ignoreUntilRelease();
+    }
+    pmic_get_double_click_flag();
+}
+
 void Hal::updateButtonStates()
 {
     const uint32_t now = millis();
-    btnA.setRawState(now, !gpio_get_level(USER_BUTTONA_PIN));
-    btnB.setRawState(now, !gpio_get_level(USER_BUTTONB_PIN));
+    const bool rawA    = !gpio_get_level(USER_BUTTONA_PIN);
+    const bool rawB    = !gpio_get_level(USER_BUTTONB_PIN);
+
+    if (isScreenSleeping()) {
+        const bool rawPwr = !gpio_get_level(BOOT_BUTTON_PIN) || pmic_get_pwr_btn_state();
+        if (rawA || rawB || rawPwr) {
+            wakeScreen();
+            if (rawA) {
+                btnA.ignoreUntilRelease();
+            }
+            if (rawB) {
+                btnB.ignoreUntilRelease();
+            }
+            if (rawPwr) {
+                btnPwr.ignoreUntilRelease();
+                pmic_get_double_click_flag();
+            }
+            btnA.setRawState(now, rawA);
+            btnB.setRawState(now, rawB);
+            btnPwr.setRawState(now, rawPwr);
+        }
+        return;
+    }
+
+    btnA.setRawState(now, rawA);
+    btnB.setRawState(now, rawB);
 
     pwr_button_tick();
 
     auto& config = getButtonConfig();
     if (btnA.wasPressed() || btnB.wasPressed()) {
-        if (isScreenSleeping()) {
-            wakeScreen();
-        } else {
-            resetActivityTimer();
-        }
+        resetActivityTimer();
     }
     if (btnA.wasPressed()) {
         if (config.sfxEnabled) {

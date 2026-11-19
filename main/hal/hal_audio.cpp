@@ -52,7 +52,7 @@ public:
         }
 
         _spectrum_init();
-        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 6 * 1024, this, 5,
+        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 6 * 1024, this, 6,
                     &_task_handle);
 
         _i2s_init();
@@ -216,34 +216,52 @@ public:
             GetHAL().setSpeakerEnable(true);
         }
 
-        // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with 1:1 original timbre
-        const double ratio = static_cast<double>(sample_rate) / static_cast<double>(std::max(8000, srcRate));
-        const std::size_t out_count = static_cast<std::size_t>(std::ceil(count * ratio));
-        if (out_count == 0) {
-            return;
-        }
+        // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with continuous phase across chunks
+        const float step = static_cast<float>(std::max(8000, srcRate)) / static_cast<float>(sample_rate);
 
-        double sum_sq = 0.0;
+        float sum_sq            = 0.0f;
+        std::size_t out_samples = 0;
+        bool trigger_task       = false;
         {
             std::lock_guard<std::mutex> lock(_play_mutex);
-            const bool starting_fresh = (_stream_count == 0 && !_is_playing);
-            for (std::size_t i = 0; i < out_count; ++i) {
-                const double src_pos   = static_cast<double>(i) / ratio;
-                const std::size_t idx0 = std::min<std::size_t>(static_cast<std::size_t>(src_pos), count - 1);
-                const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
-                const double frac      = src_pos - static_cast<double>(idx0);
+            const bool starting_fresh = (_stream_count == 0 && !_is_playing && !_stream_active && !_stream_has_prev);
+            if (starting_fresh) {
+                _resample_pos    = 0.0f;
+                _prev_src_sample = samples[0];
+                _stream_has_prev = true;
+            }
 
-                double val = static_cast<double>(samples[idx0]) * (1.0 - frac) +
-                             static_cast<double>(samples[idx1]) * frac;
+            float pos         = _resample_pos;
+            const float limit = static_cast<float>(count) - 1.0f;
+            while (pos <= limit) {
+                float s0   = 0.0f;
+                float s1   = 0.0f;
+                float frac = 0.0f;
+
+                if (pos < 0.0f) {
+                    s0   = static_cast<float>(_prev_src_sample);
+                    s1   = static_cast<float>(samples[0]);
+                    frac = pos + 1.0f;
+                } else {
+                    const std::size_t idx0 = static_cast<std::size_t>(pos);
+                    const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
+                    frac                   = pos - static_cast<float>(idx0);
+                    s0                     = static_cast<float>(samples[idx0]);
+                    s1                     = static_cast<float>(samples[idx1]);
+                }
+
+                float val = s0 * (1.0f - frac) + s1 * frac;
 
                 // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
-                if (starting_fresh && i < 64) {
-                    const double fade = 0.5 * (1.0 - std::cos(M_PI * static_cast<double>(i) / 64.0));
+                if (starting_fresh && out_samples < 64) {
+                    const float fade =
+                        0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(out_samples) / 64.0f));
                     val *= fade;
                 }
 
-                int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0, 32767.0));
-                sum_sq += static_cast<double>(sample_val) * static_cast<double>(sample_val);
+                int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
+                sum_sq += static_cast<float>(sample_val) * static_cast<float>(sample_val);
+                out_samples++;
 
                 if (_stream_count < _stream_capacity) {
                     _stream_ring[_stream_write_pos] = sample_val;
@@ -255,15 +273,43 @@ public:
                     _stream_write_pos               = (_stream_write_pos + 1) % _stream_capacity;
                     _stream_read_pos                = (_stream_read_pos + 1) % _stream_capacity;
                 }
+
+                pos += step;
             }
-            _stream_active = true;
-            _is_playing    = true;
+
+            _resample_pos    = pos - static_cast<float>(count);
+            _prev_src_sample = samples[count - 1];
+            _stream_has_prev = true;
+
+            // Pre-buffering jitter filter: accumulate ~320ms before starting playback to absorb initial network jitter
+            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.32f);
+            if (!_stream_active) {
+                if (!_stream_prebuffering) {
+                    _stream_prebuffering    = true;
+                    _stream_prebuffer_start = xTaskGetTickCount();
+                }
+                const uint32_t elapsed_ms =
+                    (xTaskGetTickCount() - _stream_prebuffer_start) * portTICK_PERIOD_MS;
+                if (_stream_count >= PREBUFFER_SAMPLES || elapsed_ms >= 380) {
+                    _stream_prebuffering = false;
+                    _stream_active       = true;
+                    _is_playing          = true;
+                    trigger_task         = true;
+                }
+            } else {
+                _is_playing  = true;
+                trigger_task = true;
+            }
         }
 
-        const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(out_count)) / 32768.0);
-        _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+        if (out_samples > 0) {
+            const float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<float>(out_samples)) / 32768.0f);
+            _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
+        }
 
-        xTaskNotifyGive(_task_handle);
+        if (trigger_task) {
+            xTaskNotifyGive(_task_handle);
+        }
     }
 
     void clearStream()
@@ -461,11 +507,11 @@ private:
                     was_streaming   = true;
                     last_stream_val = stream_chunk[popped - 1];
                     // Update RMS level for UI animation during playback
-                    double sum_sq = 0.0;
+                    float sum_sq = 0.0f;
                     for (std::size_t i = 0; i < popped; ++i) {
-                        sum_sq += static_cast<double>(stream_chunk[i]) * static_cast<double>(stream_chunk[i]);
+                        sum_sq += static_cast<float>(stream_chunk[i]) * static_cast<float>(stream_chunk[i]);
                     }
-                    float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<double>(popped)) / 32768.0);
+                    float rms = static_cast<float>(std::sqrt(sum_sq / static_cast<float>(popped)) / 32768.0f);
                     _current_rms.store(std::clamp(rms * 3.2f, 0.0f, 1.0f), std::memory_order_relaxed);
 
                     if ((++fft_decim & 3) == 0) {
@@ -477,20 +523,29 @@ private:
                 }
 
                 if (was_streaming) {
-                    // Wait briefly (25ms) for jittery network packets before flushing silence tail
-                    vTaskDelay(pdMS_TO_TICKS(25));
-                    {
+                    // Hold stream open across network jitter gaps (up to ~360ms in 10ms steps) before flushing silence tail
+                    bool received_more = false;
+                    for (int wait_idx = 0; wait_idx < 36; ++wait_idx) {
+                        vTaskDelay(pdMS_TO_TICKS(10));
                         std::lock_guard<std::mutex> lock(_play_mutex);
-                        if (_stream_count > 0 || !_audio_data.empty()) {
-                            continue;
+                        if (_stream_abort_req) {
+                            break;
                         }
+                        if (_stream_count > 0 || !_audio_data.empty()) {
+                            received_more = true;
+                            break;
+                        }
+                    }
+
+                    if (received_more) {
+                        continue;
                     }
 
                     // Stream finished: apply short cosine fade-out from last sample + silence tail to prevent DMA pop
                     int16_t last_sample = last_stream_val;
                     std::array<int16_t, 128> fade_out = {};
                     for (std::size_t i = 0; i < fade_out.size(); ++i) {
-                        double env  = 0.5 * (1.0 + std::cos(M_PI * static_cast<double>(i) / fade_out.size()));
+                        float env   = 0.5f * (1.0f + std::cos(static_cast<float>(M_PI) * static_cast<float>(i) / static_cast<float>(fade_out.size())));
                         fade_out[i] = static_cast<int16_t>(last_sample * env);
                     }
                     esp_codec_dev_write(_codec_dev, (void*)fade_out.data(), fade_out.size() * sizeof(int16_t));

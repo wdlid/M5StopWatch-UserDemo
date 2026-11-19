@@ -177,7 +177,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.items = {
             {
                 "Display",
-                fmt::format("{}% · {}", brightness, format_timeout(timeout)),
+                fmt::format("{}%  /  {}", brightness, format_timeout(timeout)),
                 LV_SYMBOL_IMAGE,
                 0xFFB74D,
                 true,
@@ -185,7 +185,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "Sound & Touch",
-                fmt::format("{}% · {}", volume, format_button_cfg(btn_cfg)),
+                fmt::format("{}%  /  {}", volume, format_button_cfg(btn_cfg)),
                 LV_SYMBOL_VOLUME_MAX,
                 0x4FC3F7,
                 true,
@@ -201,7 +201,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "Time & Date",
-                fmt::format("{:02d}:{:02d} · {}", time_hms.hour, time_hms.minute, format_timezone_short(tz)),
+                fmt::format("{:02d}:{:02d}  /  {}", time_hms.hour, time_hms.minute, format_timezone_short(tz)),
                 LV_SYMBOL_REFRESH,
                 0xBA68C8,
                 true,
@@ -348,7 +348,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "Firmware",
-                fmt::format("v{} · Check Update", common::FirmwareVersion),
+                fmt::format("v{}  /  Check Update", common::FirmwareVersion),
                 LV_SYMBOL_DOWNLOAD,
                 0x4AD78C,
                 true,

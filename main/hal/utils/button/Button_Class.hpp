@@ -58,6 +58,36 @@ public:
         _currentState = state_nochange;
     }
 
+    void reset(void)
+    {
+        _lastMsec        = 0;
+        _lastChange      = 0;
+        _lastRawChange   = 0;
+        _lastClicked     = 0;
+        _lastHoldPeriod  = 0;
+        _currentState    = state_nochange;
+        _raw_press       = false;
+        _press           = 0;
+        _oldPress        = 0;
+        _clickCount      = 0;
+        _suppressed      = false;
+    }
+
+    void ignoreUntilRelease(void)
+    {
+        _suppressed      = true;
+        _press           = 0;
+        _oldPress        = 0;
+        _currentState    = state_nochange;
+        _clickCount      = 0;
+        _raw_press       = true;
+    }
+
+    bool isSuppressed(void) const
+    {
+        return _suppressed;
+    }
+
     /// Returns true if the button is currently held pressed.
     bool isHolding(void) const
     {
@@ -153,6 +183,7 @@ private:
     std::uint8_t _press           = 0;  // 0:release  1:click  2:holding
     std::uint8_t _oldPress        = 0;
     std::uint8_t _clickCount      = 0;
+    bool _suppressed              = false;
 };
 
 }  // namespace m5

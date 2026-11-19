@@ -36,6 +36,24 @@ void Button_Class::setState(std::uint32_t msec, button_state_t state)
 
 void Button_Class::setRawState(std::uint32_t msec, bool press)
 {
+    if (_suppressed) {
+        if (_raw_press != press) {
+            _raw_press     = press;
+            _lastRawChange = msec;
+        }
+        bool disable_db = (msec - _lastMsec) > _msecDebounce;
+        if (!press && (disable_db || msec - _lastRawChange >= _msecDebounce)) {
+            _suppressed    = false;
+            _lastChange    = msec;
+        }
+        _press        = 0;
+        _oldPress     = 0;
+        _currentState = state_nochange;
+        _clickCount   = 0;
+        _lastMsec     = msec;
+        return;
+    }
+
     button_state_t state = button_state_t::state_nochange;
     bool disable_db      = (msec - _lastMsec) > _msecDebounce;
     auto oldPress        = _press;

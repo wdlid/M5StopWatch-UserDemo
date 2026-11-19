@@ -493,16 +493,42 @@ void CheckUpdateWorker::_startCheckTask()
 
                 if (rel_ver > highest_found) {
                     JsonArray assets = rel["assets"].as<JsonArray>();
+                    std::string exact_url;
+                    size_t exact_size = 0;
+                    std::string fallback_url;
+                    size_t fallback_size = 0;
+
                     for (JsonObject asset : assets) {
                         const char* asset_name = asset["name"] | "";
-                        if (strcmp(asset_name, "firmware-ota.bin") == 0 ||
-                            (strlen(asset_name) > 4 && strcmp(asset_name + strlen(asset_name) - 4, ".bin") == 0)) {
-                            highest_found = rel_ver;
-                            best_version  = (tag[0] != '\0') ? tag : name;
-                            best_url      = asset["browser_download_url"] | "";
-                            best_size     = asset["size"] | 0;
+                        const char* asset_url  = asset["browser_download_url"] | "";
+                        size_t asset_size      = asset["size"] | 0;
+                        if (asset_url[0] == '\0') {
+                            continue;
+                        }
+
+                        if (strcmp(asset_name, "firmware-ota.bin") == 0 || strcmp(asset_name, "firmware.bin") == 0) {
+                            exact_url  = asset_url;
+                            exact_size = asset_size;
                             break;
                         }
+
+                        size_t name_len = strlen(asset_name);
+                        if (name_len > 4 && strcmp(asset_name + name_len - 4, ".bin") == 0 &&
+                            strcmp(asset_name, "bootloader.bin") != 0 && strcmp(asset_name, "partitions.bin") != 0 &&
+                            strcmp(asset_name, "ota_data_initial.bin") != 0 &&
+                            strstr(asset_name, "factory") == nullptr && fallback_url.empty()) {
+                            fallback_url  = asset_url;
+                            fallback_size = asset_size;
+                        }
+                    }
+
+                    const std::string& chosen_url = !exact_url.empty() ? exact_url : fallback_url;
+                    size_t chosen_size            = !exact_url.empty() ? exact_size : fallback_size;
+                    if (!chosen_url.empty()) {
+                        highest_found = rel_ver;
+                        best_version  = (tag[0] != '\0') ? tag : name;
+                        best_url      = chosen_url;
+                        best_size     = chosen_size;
                     }
                 }
             };
