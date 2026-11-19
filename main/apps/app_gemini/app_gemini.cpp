@@ -35,6 +35,10 @@ void AppGemini::onOpen()
         GetHAL().setWifiEnabled(true, true);
     }
 
+    // Ensure speaker PA and global volume from system settings are applied
+    GetHAL().setSpeakerEnable(true);
+    GetHAL().setSpeakerVolume(GetHAL().getSpeakerVolume(true), false);
+
     {
         LvglLockGuard lock;
         _view = std::make_unique<view::GeminiView>();

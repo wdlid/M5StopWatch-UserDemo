@@ -11,9 +11,11 @@
 #include <mutex>
 #include <cmath>
 #include <esp_sleep.h>
+#include <atomic>
 
 static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
+static std::atomic<bool> _shutting_down{false};
 
 namespace {
 
@@ -67,14 +69,15 @@ void bat_reading_task(void* param)
     mclog::tagInfo(_tag, "start bat reading task");
 
     while (true) {
-        if (_pm1) {
+        if (_pm1 && !_shutting_down.load()) {
             uint16_t battery_mv = 0;
             if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
                 update_bat_level_from_mv(battery_mv);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(_bat_reading_period_ms));
+        const uint32_t period_ms = GetHAL().isScreenSleeping() ? 5000U : _bat_reading_period_ms;
+        vTaskDelay(pdMS_TO_TICKS(period_ms));
     }
 }
 
@@ -153,14 +156,23 @@ bool Hal::pmic_get_double_click_flag()
 void Hal::powerOff()
 {
     mclog::tagInfo(_tag, "power off requested");
+    _shutting_down.store(true);
     vibrate(120, 100);
     delay(200);
+    stopVibrate();
     sleepScreen();
-    setPowerLed(false);
+    ioe_power_off();
     if (_pm1) {
+        _pm1->timerClear();
+        _pm1->wdtSet(0);
+        _pm1->irqClearBtnAll();
+        _pm1->irqClearGpioAll();
+        _pm1->irqClearSysAll();
         _pm1->setLedEnLevel(false);
         _pm1->ldoSetPowerHold(false);
+        _pm1->boostSetPowerHold(false);
         _pm1->shutdown();
+        delay(300);
     }
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
     esp_deep_sleep_start();

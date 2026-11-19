@@ -94,6 +94,18 @@ public:
             .sample_rate     = sample_rate,
         };
         esp_codec_dev_open(_codec_dev, &fs);
+
+        static esp_codec_dev_vol_map_t vol_map[] = {
+            {.vol = 0, .db_value = -50.0f},
+            {.vol = 50, .db_value = -10.0f},
+            {.vol = 80, .db_value = 3.0f},
+            {.vol = 100, .db_value = 12.0f},
+        };
+        esp_codec_dev_vol_curve_t vol_curve = {
+            .vol_map = vol_map,
+            .count   = sizeof(vol_map) / sizeof(vol_map[0]),
+        };
+        esp_codec_dev_set_vol_curve(_codec_dev, &vol_curve);
     }
 
     void updateSpectrum()
@@ -201,6 +213,13 @@ public:
         if (samples == nullptr || count == 0 || _stream_ring == nullptr || _stream_capacity == 0) {
             return;
         }
+        const int spk_vol = GetHAL().getSpeakerVolume();
+        if (spk_vol <= 0) {
+            return;
+        }
+        if (GetHAL().isScreenSleeping()) {
+            GetHAL().setSpeakerEnable(true);
+        }
 
         // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) using float hardware FPU
         const float ratio = static_cast<float>(sample_rate) / static_cast<float>(std::max(8000, srcRate));
@@ -208,6 +227,10 @@ public:
         if (out_count == 0) {
             return;
         }
+
+        // Boost conversational speech headroom and scale with global speaker volume setting
+        const float vol_norm    = std::clamp(static_cast<float>(spk_vol) / 100.0f, 0.0f, 1.0f);
+        const float speech_gain = 2.8f * (0.35f + 0.65f * vol_norm);
 
         float sum_sq = 0.0f;
         bool trigger_task = false;
@@ -220,13 +243,21 @@ public:
                 const std::size_t idx1 = std::min<std::size_t>(idx0 + 1, count - 1);
                 const float frac       = src_pos - static_cast<float>(idx0);
 
-                float val = static_cast<float>(samples[idx0]) * (1.0f - frac) +
-                            static_cast<float>(samples[idx1]) * frac;
+                float val = (static_cast<float>(samples[idx0]) * (1.0f - frac) +
+                             static_cast<float>(samples[idx1]) * frac) *
+                            speech_gain;
 
                 // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
                 if (starting_fresh && i < 64) {
                     const float fade = 0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(i) / 64.0f));
                     val *= fade;
+                }
+
+                // Soft-knee saturation above +/-24000 to keep loud speech punchy without harsh digital clipping
+                if (val > 24000.0f) {
+                    val = 24000.0f + 8767.0f * std::tanh((val - 24000.0f) / 8767.0f);
+                } else if (val < -24000.0f) {
+                    val = -24000.0f + 8768.0f * std::tanh((val + 24000.0f) / 8768.0f);
                 }
 
                 int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
@@ -453,6 +484,9 @@ private:
 
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
                                         _silence_buffer.size() * sizeof(int16_t));
+                    if (GetHAL().isScreenSleeping()) {
+                        GetHAL().setSpeakerEnable(false);
+                    }
                     continue;
                 }
 
@@ -513,6 +547,9 @@ private:
                         _is_playing          = false;
                     }
                     was_streaming = false;
+                    if (GetHAL().isScreenSleeping()) {
+                        GetHAL().setSpeakerEnable(false);
+                    }
                 }
 
                 break;

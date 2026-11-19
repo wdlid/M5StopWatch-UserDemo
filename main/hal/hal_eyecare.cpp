@@ -77,5 +77,9 @@ void Hal::eye_care_tick()
 void Hal::playEyeCareDing()
 {
     mclog::tagInfo(_tag, "playing eye care reminder ding (boot sfx)");
+    ioe_speaker_enable(true);
+    if (getSpeakerVolume() <= 0) {
+        setSpeakerVolume(80, false);
+    }
     playBootSfx();
 }

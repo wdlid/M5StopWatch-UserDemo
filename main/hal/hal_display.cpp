@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include "drivers/cst820/cst820.h"
 #include "utils/settings/settings.h"
 #include <mooncake_log.h>
 #include <M5GFX.h>
@@ -159,10 +160,18 @@ public:
     {
         _panel_instance.setBrightness(brightness);
     }
+
+    void setSleep(bool sleep)
+    {
+        _panel_instance.startWrite();
+        _panel_instance.setSleep(sleep);
+        _panel_instance.endWrite();
+    }
 };
 
 static std::unique_ptr<M5StopWatch> _display;
 static std::unique_ptr<LGFX_Sprite> _canvas;
+static std::unique_ptr<Cst820> _cst820;
 
 static bool _screen_sleeping        = false;
 static uint32_t _screen_timeout_sec = 30;
@@ -358,7 +367,17 @@ void Hal::sleepScreen()
         return;
     }
     _screen_sleeping = true;
-    _display->setBrightness(0);
+    stopLvglUpdate();
+    if (_display) {
+        _display->setBrightness(0);
+        _display->setSleep(true);
+    }
+    if (_cst820) {
+        _cst820->sleep();
+    }
+    if (!isAudioPlaying()) {
+        ioe_speaker_enable(false);
+    }
     setPowerLed(false);
     mclog::tagInfo(_tag, "screen sleep");
 }
@@ -368,12 +387,18 @@ void Hal::wakeScreen()
     if (!_screen_sleeping) {
         return;
     }
-    _screen_sleeping = false;
+    _screen_sleeping    = false;
     _last_activity_time = millis();
     _last_wake_time     = _last_activity_time;
-    int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
-    _display->setBrightness(set_target);
+    ioe_tp_reset();
+    if (_display) {
+        _display->setSleep(false);
+        int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
+        _display->setBrightness(set_target);
+    }
+    ioe_speaker_enable(true);
     setPowerLed(false);
+    startLvglUpdate();
     mclog::tagInfo(_tag, "screen wake");
 
     wifi_on_screen_wake();
@@ -399,9 +424,6 @@ void Hal::display_tick()
 /* -------------------------------------------------------------------------- */
 /*                                  Touchpad                                  */
 /* -------------------------------------------------------------------------- */
-#include "drivers/cst820/cst820.h"
-
-static std::unique_ptr<Cst820> _cst820;
 
 void Hal::touchpad_init()
 {
@@ -446,22 +468,28 @@ static std::atomic<bool> _lvgl_update_enabled = false;
 static void lvgl_tick_timer(void *arg)
 {
     (void)arg;
-    lv_tick_inc(10);
+    lv_tick_inc(5);
 }
 
 static void lvgl_rtos_task(void *pvParameter)
 {
     (void)pvParameter;
     while (1) {
-        if (_lvgl_update_enabled && pdTRUE == xSemaphoreTake(xGuiSemaphore, portMAX_DELAY)) {
+        if (!_lvgl_update_enabled) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        uint32_t time_till_next = 5;
+        if (pdTRUE == xSemaphoreTake(xGuiSemaphore, portMAX_DELAY)) {
             // Recheck after taking the mutex. stopLvglUpdate() may have been
             // called while this task was waiting for an in-flight UI update.
             if (_lvgl_update_enabled) {
-                lv_timer_handler();
+                time_till_next = lv_timer_handler();
             }
             xSemaphoreGive(xGuiSemaphore);
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
+        uint32_t delay_ms = uitk::clamp(time_till_next, 1U, 15U);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
 
@@ -472,9 +500,9 @@ static inline void wait_for_te()
         return;
     }
     uint32_t start = esp_timer_get_time();
-    int initial_level = gpio_get_level(cfg_pin_te);
-    while (gpio_get_level(cfg_pin_te) == initial_level) {
-        if ((uint32_t)(esp_timer_get_time() - start) > 18000) {
+    // Wait for TE rising edge (or active high period) with bounded timeout
+    while (gpio_get_level(cfg_pin_te) == 0) {
+        if ((uint32_t)(esp_timer_get_time() - start) > 12000) {
             timeout_count++;
             return;
         }
@@ -499,30 +527,12 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
         }
     }
 
+    // Fast 32-bit in-place byte swap so M5GFX can memcpy rows directly into its framebuffer
+    lv_draw_sw_rgb565_swap(px_map, pixels);
+
     gfx.startWrite();
     gfx.setAddrWindow(area->x1, area->y1, w, h);
-
-    // Critical fix: Use safe pixel writing method to avoid M5GFX SIMD optimizations
-    // Break large transfers into small chunks to avoid problematic copy_rgb_fast function
-    const uint32_t SAFE_CHUNK_SIZE = 8192;  // 8K pixels per chunk, suitable for small buffer settings
-
-    if (pixels > SAFE_CHUNK_SIZE) {
-        // Chunked transmission for large data
-        const lgfx::rgb565_t *src = (const lgfx::rgb565_t *)px_map;
-        uint32_t remaining        = pixels;
-        uint32_t offset           = 0;
-
-        while (remaining > 0) {
-            uint32_t chunk_size = (remaining > SAFE_CHUNK_SIZE) ? SAFE_CHUNK_SIZE : remaining;
-            gfx.writePixels(src + offset, chunk_size);
-            offset += chunk_size;
-            remaining -= chunk_size;
-        }
-    } else {
-        // Direct transmission for small data
-        gfx.writePixels((lgfx::rgb565_t *)px_map, pixels);
-    }
-
+    gfx.writePixels((const lgfx::swap565_t *)px_map, pixels);
     gfx.endWrite();
 
     if (lv_display_flush_is_last(disp)) {
@@ -536,15 +546,14 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
+    if (GetHAL().isScreenSleeping()) {
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
     auto tp = GetHAL().getTouchPoint();
     if (tp.num == 0) {
         data->state = LV_INDEV_STATE_REL;
     } else {
-        if (GetHAL().isScreenSleeping()) {
-            GetHAL().wakeScreen();
-            data->state = LV_INDEV_STATE_REL;
-            return;
-        }
         GetHAL().resetActivityTimer();
         data->state   = LV_INDEV_STATE_PR;
         data->point.x = tp.x;
@@ -582,13 +591,16 @@ void Hal::lvgl_init()
     lv_indev_set_type(lvTouchpad, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(lvTouchpad, lvgl_read_cb);
     lv_indev_set_display(lvTouchpad, disp);
+    if (lv_timer_t *indev_timer = lv_indev_get_read_timer(lvTouchpad)) {
+        lv_timer_set_period(indev_timer, 10);
+    }
 
     xGuiSemaphore                                     = xSemaphoreCreateMutex();
     const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
-    xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 1, NULL);
+    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 5 * 1000));
+    xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 5, NULL, 1);
 
     startLvglUpdate();
 

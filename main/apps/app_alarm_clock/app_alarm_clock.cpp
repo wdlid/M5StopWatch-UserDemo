@@ -29,6 +29,9 @@ void AppAlarmClock::onCreate()
     }
 
     _alarm_clock->onTriggered().connect([this](const model::AlarmClock::AlarmTriggeredEvent& event) {
+        if (GetHAL().isScreenSleeping()) {
+            GetHAL().wakeScreen();
+        }
         std::unique_ptr<view::AlarmTriggerView> trigger_view;
         {
             LvglLockGuard lock;
@@ -77,6 +80,10 @@ void AppAlarmClock::onRunning()
 
     if (_alarm_clock) {
         _alarm_clock->update();
+    }
+
+    if (GetHAL().isScreenSleeping()) {
+        return;
     }
 
     LvglLockGuard lock;

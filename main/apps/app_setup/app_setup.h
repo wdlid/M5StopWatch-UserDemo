@@ -26,12 +26,26 @@ public:
     void onClose() override;
 
 private:
-    std::vector<view::SelectMenuPage::MenuSection> _menu_sections;
+    enum class MenuPageId {
+        Root,
+        Display,
+        Sound,
+        DateTime,
+        System,
+    };
+
     std::unique_ptr<view::SelectMenuPage> _menu_page;
     std::unique_ptr<setup_workers::WorkerBase> _worker;
     std::unique_ptr<input::KeyManager> _key_manager;
 
-    bool _destroy_menu    = false;
-    bool _need_warm_reset = false;
-    int _magic_count      = 0;
+    MenuPageId _current_page = MenuPageId::Root;
+    MenuPageId _pending_page = MenuPageId::Root;
+    int _root_scroll_index   = 0;
+    int _sub_scroll_index    = 0;
+    bool _switch_menu        = false;
+    bool _destroy_menu       = false;
+    bool _need_warm_reset    = false;
+
+    void open_menu(MenuPageId page);
+    view::SelectMenuPage::Config build_menu_config(MenuPageId page);
 };

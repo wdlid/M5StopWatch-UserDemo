@@ -50,6 +50,10 @@ void AppLuckyWheel::onRunning()
         return;
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     if (_selection_view) {
         if (_selection_view->isConfirmed()) {
             int optionCount = _selection_view->confirmedOptionCount();

@@ -55,6 +55,10 @@ void AppBadge::onRunning()
         return;
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     LvglLockGuard lock;
 
     const uint32_t intervalMs = GetHAL().getBadgeCarouselIntervalMs();

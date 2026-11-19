@@ -97,12 +97,16 @@ struct Version {
 
 struct HttpRespBuf {
     std::string body;
-    size_t max_size = 64 * 1024;
+    size_t max_size                = 64 * 1024;
+    std::atomic<bool>* abort_flag = nullptr;
 };
 
 esp_err_t http_event_cb(esp_http_client_event_t* evt)
 {
     auto* b = static_cast<HttpRespBuf*>(evt->user_data);
+    if (b != nullptr && b->abort_flag != nullptr && b->abort_flag->load()) {
+        return ESP_FAIL;
+    }
     if (evt->event_id == HTTP_EVENT_ON_DATA && b != nullptr && evt->data != nullptr && evt->data_len > 0) {
         if (b->body.size() + evt->data_len <= b->max_size) {
             b->body.append(static_cast<const char*>(evt->data), evt->data_len);
@@ -112,6 +116,24 @@ esp_err_t http_event_cb(esp_http_client_event_t* evt)
 }
 
 }  // namespace
+
+struct CheckUpdateWorker::CheckTaskContext {
+    std::mutex mutex;
+    std::atomic<bool> abort_requested{false};
+    std::atomic<bool> finished{false};
+    Step result_step = Step::CheckingGithub;
+    UpdateInfo info;
+};
+
+struct CheckUpdateWorker::OtaTaskContext {
+    std::mutex mutex;
+    std::atomic<bool> abort_requested{false};
+    std::atomic<bool> finished{false};
+    std::string download_url;
+    size_t expected_size = 0;
+    Step result_step     = Step::Downloading;
+    UpdateInfo info;
+};
 
 class CheckUpdateWorker::CheckUpdateView {
 public:
@@ -191,10 +213,11 @@ public:
         _btn_center->label().setTextFont(&lv_font_montserrat_22);
         _btn_center->label().setTextColor(lv_color_hex(0xF8FAFC));
         _btn_center->label().align(LV_ALIGN_CENTER, 0, 0);
+        _btn_center->label().removeFlag(LV_OBJ_FLAG_CLICKABLE);
 
         _created_at = GetHAL().millis();
         _btn_center->onClick().connect([this]() {
-            if (GetHAL().millis() - _created_at >= 400) {
+            if (GetHAL().millis() - _created_at >= 300) {
                 _center_clicked = true;
             }
         });
@@ -211,10 +234,11 @@ public:
         _btn_left->label().setTextFont(&lv_font_montserrat_22);
         _btn_left->label().setTextColor(lv_color_hex(0x94A3B8));
         _btn_left->label().align(LV_ALIGN_CENTER, 0, 0);
+        _btn_left->label().removeFlag(LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(_btn_left->get(), LV_OBJ_FLAG_HIDDEN);
 
         _btn_left->onClick().connect([this]() {
-            if (GetHAL().millis() - _created_at >= 400) {
+            if (GetHAL().millis() - _created_at >= 300) {
                 _later_clicked = true;
             }
         });
@@ -231,10 +255,11 @@ public:
         _btn_right->label().setTextFont(&lv_font_montserrat_22);
         _btn_right->label().setTextColor(lv_color_hex(0xFFFFFF));
         _btn_right->label().align(LV_ALIGN_CENTER, 0, 0);
+        _btn_right->label().removeFlag(LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(_btn_right->get(), LV_OBJ_FLAG_HIDDEN);
 
         _btn_right->onClick().connect([this]() {
-            if (GetHAL().millis() - _created_at >= 400) {
+            if (GetHAL().millis() - _created_at >= 300) {
                 _update_clicked = true;
             }
         });
@@ -349,32 +374,38 @@ CheckUpdateWorker::~CheckUpdateWorker()
 
 void CheckUpdateWorker::_stopTask()
 {
-    _abort_requested = true;
-    auto client = static_cast<esp_http_client_handle_t>(_http_client.load());
-    if (client) {
-        esp_http_client_cancel_request(client);
+    if (_check_ctx) {
+        _check_ctx->abort_requested.store(true);
+        _check_ctx.reset();
     }
-    while (_task_running) {
-        vTaskDelay(pdMS_TO_TICKS(20));
+    if (_ota_ctx) {
+        _ota_ctx->abort_requested.store(true);
+        _ota_ctx.reset();
     }
-    _task_handle = nullptr;
 }
 
 void CheckUpdateWorker::_startCheckTask()
 {
-    _abort_requested = false;
-    _task_running   = true;
+    if (_check_ctx) {
+        _check_ctx->abort_requested.store(true);
+    }
+    _check_ctx       = std::make_shared<CheckTaskContext>();
+    _check_started_at = GetHAL().millis();
 
-    xTaskCreate(
+    auto* ctx_holder = new std::shared_ptr<CheckTaskContext>(_check_ctx);
+    BaseType_t res   = xTaskCreate(
         [](void* arg) {
-            auto* self = static_cast<CheckUpdateWorker*>(arg);
+            auto* holder = static_cast<std::shared_ptr<CheckTaskContext>*>(arg);
+            std::shared_ptr<CheckTaskContext> ctx = std::move(*holder);
+            delete holder;
 
             HttpRespBuf resp;
+            resp.abort_flag                 = &ctx->abort_requested;
             esp_http_client_config_t config = {};
             config.url                      = GITHUB_LATEST_URL;
             config.method                   = HTTP_METHOD_GET;
             config.crt_bundle_attach        = esp_crt_bundle_attach;
-            config.timeout_ms               = 8000;
+            config.timeout_ms               = 6000;
             config.buffer_size              = 4096;
             config.buffer_size_tx           = 1024;
             config.max_redirection_count    = 5;
@@ -383,56 +414,52 @@ void CheckUpdateWorker::_startCheckTask()
 
             esp_http_client_handle_t client = esp_http_client_init(&config);
             if (!client) {
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                self->_step          = Step::CheckFailed;
-                self->_info.errorMsg = "HTTP client init failed";
-                self->_task_running  = false;
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::CheckFailed;
+                ctx->info.errorMsg = "HTTP client init failed";
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
 
-            self->_http_client.store(client);
             esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
             esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
 
             esp_err_t err = esp_http_client_perform(client);
             int status    = esp_http_client_get_status_code(client);
-            self->_http_client.store(nullptr);
             esp_http_client_cleanup(client);
 
             // If /releases/latest returned 404 (e.g. only prereleases exist), fallback to /releases
-            if (err == ESP_OK && status == 404 && !self->_abort_requested) {
+            if (err == ESP_OK && status == 404 && !ctx->abort_requested.load()) {
                 resp.body.clear();
                 config.url = GITHUB_RELEASES_URL;
                 client     = esp_http_client_init(&config);
                 if (client) {
-                    self->_http_client.store(client);
                     esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
                     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
                     err    = esp_http_client_perform(client);
                     status = esp_http_client_get_status_code(client);
-                    self->_http_client.store(nullptr);
                     esp_http_client_cleanup(client);
                 }
             }
 
-            if (self->_abort_requested) {
-                self->_task_running = false;
+            if (ctx->abort_requested.load()) {
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
 
             if (err != ESP_OK || status != 200 || resp.body.empty()) {
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                self->_step = Step::CheckFailed;
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step = Step::CheckFailed;
                 char err_buf[64];
                 if (err != ESP_OK) {
                     snprintf(err_buf, sizeof(err_buf), "Network error (%s)", esp_err_to_name(err));
                 } else {
                     snprintf(err_buf, sizeof(err_buf), "Server error (HTTP %d)", status);
                 }
-                self->_info.errorMsg = err_buf;
-                self->_task_running  = false;
+                ctx->info.errorMsg = err_buf;
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
@@ -441,10 +468,10 @@ void CheckUpdateWorker::_startCheckTask()
             JsonDocument doc;
             DeserializationError d_err = deserializeJson(doc, resp.body);
             if (d_err != DeserializationError::Ok) {
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                self->_step          = Step::CheckFailed;
-                self->_info.errorMsg = "Failed to parse release info";
-                self->_task_running  = false;
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::CheckFailed;
+                ctx->info.errorMsg = "Failed to parse release info";
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
@@ -488,38 +515,50 @@ void CheckUpdateWorker::_startCheckTask()
                 process_release(doc.as<JsonObject>());
             }
 
-            std::lock_guard<std::mutex> lk(self->_mutex);
-            if (highest_found > current_ver && !best_url.empty()) {
-                self->_step               = Step::UpdateAvailable;
-                self->_info.latestVersion = best_version;
-                self->_info.downloadUrl   = best_url;
-                self->_info.fileSize      = best_size;
-            } else {
-                self->_step = Step::UpToDate;
+            {
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                if (highest_found > current_ver && !best_url.empty()) {
+                    ctx->result_step        = Step::UpdateAvailable;
+                    ctx->info.latestVersion = best_version;
+                    ctx->info.downloadUrl   = best_url;
+                    ctx->info.fileSize      = best_size;
+                } else {
+                    ctx->result_step = Step::UpToDate;
+                }
             }
 
-            self->_task_running = false;
+            ctx->finished.store(true);
             vTaskDelete(NULL);
         },
-        "check_update_task", 16 * 1024, this, 5, &_task_handle);
+        "check_update_task", 16 * 1024, ctx_holder, 5, nullptr);
+
+    if (res != pdPASS) {
+        delete ctx_holder;
+        _check_ctx.reset();
+        _step          = Step::CheckFailed;
+        _info.errorMsg = "Failed to start check task";
+    }
 }
 
 void CheckUpdateWorker::_startOtaTask()
 {
-    _abort_requested = false;
-    _task_running   = true;
+    if (_ota_ctx) {
+        _ota_ctx->abort_requested.store(true);
+    }
+    _ota_ctx                = std::make_shared<OtaTaskContext>();
+    _ota_ctx->download_url  = _info.downloadUrl;
+    _ota_ctx->expected_size = _info.fileSize;
+    _ota_ctx->info          = _info;
 
-    xTaskCreate(
+    auto* ctx_holder = new std::shared_ptr<OtaTaskContext>(_ota_ctx);
+    BaseType_t res   = xTaskCreate(
         [](void* arg) {
-            auto* self = static_cast<CheckUpdateWorker*>(arg);
+            auto* holder = static_cast<std::shared_ptr<OtaTaskContext>*>(arg);
+            std::shared_ptr<OtaTaskContext> ctx = std::move(*holder);
+            delete holder;
 
-            std::string url;
-            size_t expected_size = 0;
-            {
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                url           = self->_info.downloadUrl;
-                expected_size = self->_info.fileSize;
-            }
+            const std::string& url     = ctx->download_url;
+            const size_t expected_size = ctx->expected_size;
 
             mclog::tagInfo(_tag, "Starting HTTPS OTA from: {}", url);
 
@@ -540,15 +579,15 @@ void CheckUpdateWorker::_startOtaTask()
             esp_err_t err                     = esp_https_ota_begin(&ota_config, &ota_handle);
             if (err != ESP_OK || ota_handle == nullptr) {
                 mclog::tagError(_tag, "esp_https_ota_begin failed: {}", esp_err_to_name(err));
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                self->_step          = Step::UpdateFailed;
-                self->_info.errorMsg = "OTA begin failed (" + std::string(esp_err_to_name(err)) + ")";
-                self->_task_running  = false;
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::UpdateFailed;
+                ctx->info.errorMsg = "OTA begin failed (" + std::string(esp_err_to_name(err)) + ")";
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
 
-            while (!self->_abort_requested) {
+            while (!ctx->abort_requested.load()) {
                 err = esp_https_ota_perform(ota_handle);
                 if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
                     break;
@@ -563,17 +602,17 @@ void CheckUpdateWorker::_startOtaTask()
                 if (progress > 100) progress = 100;
 
                 {
-                    std::lock_guard<std::mutex> lk(self->_mutex);
-                    self->_info.bytesReceived = read_len;
-                    self->_info.totalBytes    = total_len;
-                    self->_info.progress      = progress;
+                    std::lock_guard<std::mutex> lk(ctx->mutex);
+                    ctx->info.bytesReceived = read_len;
+                    ctx->info.totalBytes    = total_len;
+                    ctx->info.progress      = progress;
                 }
             }
 
-            if (self->_abort_requested) {
+            if (ctx->abort_requested.load()) {
                 mclog::tagWarn(_tag, "OTA aborted by user");
                 esp_https_ota_abort(ota_handle);
-                self->_task_running = false;
+                ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
@@ -583,10 +622,10 @@ void CheckUpdateWorker::_startOtaTask()
                     esp_err_t finish_err = esp_https_ota_finish(ota_handle);
                     if (finish_err == ESP_OK) {
                         mclog::tagInfo(_tag, "OTA update successfully completed");
-                        std::lock_guard<std::mutex> lk(self->_mutex);
-                        self->_step          = Step::UpdateSuccess;
-                        self->_info.progress = 100;
-                        self->_task_running  = false;
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::UpdateSuccess;
+                        ctx->info.progress = 100;
+                        ctx->finished.store(true);
                         vTaskDelete(NULL);
                         return;
                     } else {
@@ -601,28 +640,51 @@ void CheckUpdateWorker::_startOtaTask()
 
             esp_https_ota_abort(ota_handle);
             {
-                std::lock_guard<std::mutex> lk(self->_mutex);
-                self->_step          = Step::UpdateFailed;
-                self->_info.errorMsg = "OTA failed (" + std::string(esp_err_to_name(err)) + ")";
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::UpdateFailed;
+                ctx->info.errorMsg = "OTA failed (" + std::string(esp_err_to_name(err)) + ")";
             }
 
-            self->_task_running = false;
+            ctx->finished.store(true);
             vTaskDelete(NULL);
         },
-        "ota_download_task", 16 * 1024, this, 5, &_task_handle);
+        "ota_download_task", 16 * 1024, ctx_holder, 5, nullptr);
+
+    if (res != pdPASS) {
+        delete ctx_holder;
+        _ota_ctx.reset();
+        _step          = Step::UpdateFailed;
+        _info.errorMsg = "Failed to start OTA task";
+    }
 }
 
 void CheckUpdateWorker::update()
 {
     if (!_view) return;
 
-    Step current_step;
-    UpdateInfo info;
-    {
-        std::lock_guard<std::mutex> lk(_mutex);
-        current_step = _step;
-        info         = _info;
+    if (_step == Step::CheckingGithub && _check_ctx) {
+        if (_check_ctx->finished.load()) {
+            std::lock_guard<std::mutex> lk(_check_ctx->mutex);
+            _step = _check_ctx->result_step;
+            _info = _check_ctx->info;
+            _check_ctx.reset();
+        } else if (GetHAL().millis() - _check_started_at >= 15000) {
+            _check_ctx->abort_requested.store(true);
+            _check_ctx.reset();
+            _step          = Step::CheckFailed;
+            _info.errorMsg = "Connection timed out";
+        }
+    } else if (_step == Step::Downloading && _ota_ctx) {
+        std::lock_guard<std::mutex> lk(_ota_ctx->mutex);
+        _info = _ota_ctx->info;
+        if (_ota_ctx->finished.load()) {
+            _step = _ota_ctx->result_step;
+            _ota_ctx.reset();
+        }
     }
+
+    Step current_step = _step;
+    UpdateInfo info   = _info;
 
     if (current_step != _last_rendered_step) {
         _last_rendered_step = current_step;
@@ -675,13 +737,9 @@ void CheckUpdateWorker::update()
     case Step::CheckingWifi: {
         auto wifiStatus = GetHAL().getWifiStatus();
         if (wifiStatus.connected && !wifiStatus.ipAddress.empty()) {
-            {
-                std::lock_guard<std::mutex> lk(_mutex);
-                _step = Step::CheckingGithub;
-            }
+            _step = Step::CheckingGithub;
             _startCheckTask();
         } else {
-            std::lock_guard<std::mutex> lk(_mutex);
             _step = Step::WifiNotConnected;
         }
         break;
@@ -709,10 +767,7 @@ void CheckUpdateWorker::update()
         if (_view->consumeLaterClicked() || _view->consumeCenterClicked() || GetHAL().btnA.wasClicked()) {
             _is_done = true;
         } else if (_view->consumeUpdateClicked() || GetHAL().btnB.wasClicked()) {
-            {
-                std::lock_guard<std::mutex> lk(_mutex);
-                _step = Step::Downloading;
-            }
+            _step = Step::Downloading;
             _startOtaTask();
         }
         break;

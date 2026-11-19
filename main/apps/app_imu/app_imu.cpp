@@ -48,6 +48,10 @@ void AppImu::onRunning()
         return;
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     LvglLockGuard lock;
 
     if (_view) {

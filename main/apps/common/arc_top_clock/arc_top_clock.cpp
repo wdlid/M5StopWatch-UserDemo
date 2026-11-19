@@ -105,11 +105,12 @@ void ArcTopClock::set_clock_to(const std::string_view text)
 {
     const int count = std::min((int)text.size(), (int)labels.size());
     for (int i = 0; i < count; i++) {
-        if (text[i] == '0') {
-            labels[i]->setText("O");
-        } else {
-            char buf[2] = {text[i], '\0'};
-            labels[i]->setText(buf);
+        const char target_char = (text[i] == '0') ? 'O' : text[i];
+        const char* cur        = lv_label_get_text(labels[i]->get());
+        if (cur && cur[0] == target_char && cur[1] == '\0') {
+            continue;
         }
+        char buf[2] = {target_char, '\0'};
+        labels[i]->setText(buf);
     }
 }

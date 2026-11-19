@@ -43,6 +43,10 @@ void AppStopWatch::onRunning()
         return;
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     LvglLockGuard lock;
 
     _view->update(false);

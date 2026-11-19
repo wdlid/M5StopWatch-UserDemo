@@ -17,13 +17,17 @@ static std::vector<int> c_major_scale = {60, 62, 64, 65, 67, 69, 71};  // Cå¤§è°
 
 static float get_effective_volume_scale(float volumeScale)
 {
-    return std::max(0.0f, volumeScale);
+    const float spk_vol = std::clamp(static_cast<float>(GetHAL().getSpeakerVolume()) / 100.0f, 0.0f, 1.0f);
+    return std::max(0.0f, volumeScale * (0.25f + 0.75f * spk_vol));
 }
 
 void play_tone(int frequency, float durationSec, float volumeScale)
 {
     if (GetHAL().getSpeakerVolume() <= 0) {
         return;
+    }
+    if (GetHAL().isScreenSleeping()) {
+        GetHAL().setSpeakerEnable(true);
     }
 
     const int sample_rate = GetHAL().getAudioSampleRate();
@@ -64,6 +68,9 @@ void play_melody(const std::vector<int>& midiList, float durationSec, float volu
 {
     if (GetHAL().getSpeakerVolume() <= 0) {
         return;
+    }
+    if (GetHAL().isScreenSleeping()) {
+        GetHAL().setSpeakerEnable(true);
     }
 
     const int sample_rate      = GetHAL().getAudioSampleRate();

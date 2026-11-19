@@ -373,6 +373,7 @@ private:
     void ioe_init();
     void ioe_tp_reset();
     void ioe_speaker_enable(bool enable);
+    void ioe_power_off();
     void display_init();
     void touchpad_init();
     void lvgl_init();

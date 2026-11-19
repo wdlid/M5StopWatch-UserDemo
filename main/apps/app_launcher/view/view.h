@@ -44,6 +44,7 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
 
     int _clicked_app_id = -1;
+    int _last_scroll_x  = -999999;
     State_t _state      = STATE_STARTUP;
 
     void scroll_to_nearby_icon(int direction);

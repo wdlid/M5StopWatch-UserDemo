@@ -171,12 +171,18 @@ public:
         }
 
         // Update opacity based on distance when in transition zone
+        lv_opa_t target_opa = 0;
         if (should_be_visible && distance_to_icon > (show_range - transition_zone)) {
             // Fade out as approaching edge
             float fade_ratio = 1.0f - (float)(distance_to_icon - (show_range - transition_zone)) / transition_zone;
-            _label->setOpa(255 * fade_ratio);
+            target_opa       = static_cast<lv_opa_t>(static_cast<int>(255 * fade_ratio) & ~3);
         } else if (should_be_visible) {
-            _label->setOpa(255);
+            target_opa = 255;
+        }
+
+        if (_last_opa != target_opa) {
+            _last_opa = target_opa;
+            _label->setOpa(target_opa);
         }
     }
 
@@ -185,16 +191,16 @@ private:
     int _icon_gap      = 0;
     int _current_index = 0;
     int _last_index    = 0;
-    bool _is_visible   = false;
+    lv_opa_t _last_opa = 255;
 
     std::unique_ptr<Label> _label;
 };
 
 static std::string _tag        = "LauncherView";
 static constexpr int _icon_gap = 466;
-// Create 5 copies: [0:Backup] [1:Buffer] [2:Main] [3:Buffer] [4:Backup]
-static constexpr int _loop_copies       = 5;
-static constexpr int _center_copy_index = 2;
+// Create 3 copies: [0:LeftBuffer] [1:Main] [2:RightBuffer]
+static constexpr int _loop_copies       = 3;
+static constexpr int _center_copy_index = 1;
 
 static int _last_clicked_icon_pos_x = -1;
 static std::unique_ptr<PageIndicator> _page_indicator;
@@ -347,16 +353,18 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     if (_last_clicked_icon_pos_x != -1) {
         // Just restore where they left off, it should be in a valid range
-        // mclog::tagInfo(_tag, "navigate to last clicked icon, pos x: {}", _last_clicked_icon_pos_x);
         restore_icon_pos_x       = _last_clicked_icon_pos_x;
         need_restore             = true;
         _last_clicked_icon_pos_x = -1;
+    } else {
+        restore_icon_pos_x = default_start_x;
+        need_restore       = true;
     }
 
     if (need_restore) {
         _panel->scrollBy(-restore_icon_pos_x, 0, LV_ANIM_OFF);
 
-        _page_indicator->jumpTo(restore_icon_pos_x / _icon_gap);
+        _page_indicator->jumpTo((restore_icon_pos_x / _icon_gap) % appPorps.size());
         _dynamic_icon_label->jumpTo(restore_icon_pos_x / _icon_gap);
 
         _state = STATE_NORMAL;
@@ -423,8 +431,11 @@ void LauncherView::handle_state_normal()
     int scroll_x = _panel->getScrollX();
     // mclog::tagInfo(_tag, "scroll x: {}", scroll_x);
 
-    _page_indicator->update(scroll_x);
-    _dynamic_icon_label->update(scroll_x);
+    if (scroll_x != _last_scroll_x) {
+        _last_scroll_x = scroll_x;
+        _page_indicator->update(scroll_x);
+        _dynamic_icon_label->update(scroll_x);
+    }
 
     if (_clock) {
         _clock->update();
@@ -439,18 +450,15 @@ void LauncherView::handle_scroll_in_loop()
     int set_width_px  = icons_per_set * _icon_gap;
 
     // Check boundaries
-    // If we are mostly in Copy 1, jump to Copy 2
-    // If we are mostly in Copy 3, jump to Copy 2
-    // Copy Index: 0 1 [2] 3 4
+    // If we are in Copy 0, jump to Copy 1
+    // If we are in Copy 2, jump to Copy 1
+    // Copy Index: 0 [1] 2
 
     int current_scroll_x = _panel->getScrollX();
 
-    // Define safe zone (Copy 2)
-    int center_set_start_x = _center_copy_index * set_width_px;
-
-    // Thresholds: midpoint of Wrap sets
-    int left_trigger_limit  = 1 * set_width_px + (set_width_px / 2);  // Middle of Set 1
-    int right_trigger_limit = 3 * set_width_px + (set_width_px / 2);  // Middle of Set 3
+    // Thresholds: boundaries of center set (Set 1)
+    int left_trigger_limit  = 1 * set_width_px;
+    int right_trigger_limit = 2 * set_width_px - _icon_gap;
 
     // Wrap-around Logic
     // Only perform teleport if we are NOT in an automated scroll animation
@@ -460,11 +468,11 @@ void LauncherView::handle_scroll_in_loop()
 
     if (!is_auto_scrolling) {
         if (current_scroll_x < left_trigger_limit) {
-            // Too far left (Set 1), warp right to Set 2
+            // Too far left (Set 0), warp right to Set 1
             // scrollBy(-val) increases scroll_x
             _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
         } else if (current_scroll_x > right_trigger_limit) {
-            // Too far right (Set 3), warp left to Set 2
+            // Too far right (Set 2), warp left to Set 1
             // scrollBy(+val) decreases scroll_x
             _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);
         }

@@ -73,11 +73,11 @@ public:
                 _sntp_sync_requested = false;
             }
 
-            // Standby Wi-Fi auto-sleep: Stop Wi-Fi 3 minutes after screen sleeps
+            // Standby Wi-Fi auto-sleep: Stop Wi-Fi 15 seconds after screen sleeps
             if (_wifi_enabled && !_wifi_suspended && !_badge_active && GetHAL().isScreenSleeping()) {
                 if (_screen_sleep_start_ms == 0) {
                     _screen_sleep_start_ms = now;
-                } else if (now - _screen_sleep_start_ms >= 180000) {  // 3 minutes (180s)
+                } else if (now - _screen_sleep_start_ms >= 15000) {  // 15 seconds
                     if (!GetHAL().isOtaRunning()) {
                         should_suspend_wifi = true;
                         _wifi_suspended     = true;
@@ -89,7 +89,7 @@ public:
         }
 
         if (should_suspend_wifi) {
-            mclog::tagInfo(_tag, "screen asleep for 3 mins: stopping Wi-Fi for power saving");
+            mclog::tagInfo(_tag, "screen asleep: stopping Wi-Fi for standby power saving");
             stop_wifi_owner();
             set_off_status("Standby power save");
             return;

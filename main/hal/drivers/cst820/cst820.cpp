@@ -22,7 +22,7 @@ bool Cst820::begin(i2c_master_bus_handle_t bus_handle, uint8_t addr)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address  = _addr,
-        .scl_speed_hz    = 100000,  // Original driver used 100kHz
+        .scl_speed_hz    = 400000,
     };
 
     esp_err_t ret = i2c_master_bus_add_device(bus_handle, &dev_cfg, &_i2c_dev);

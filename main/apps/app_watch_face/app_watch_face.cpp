@@ -58,6 +58,10 @@ void AppWatchFace::onRunning()
         }
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     LvglLockGuard lock;
 
     _watch_face_manager->update();

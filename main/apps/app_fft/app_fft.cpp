@@ -42,6 +42,10 @@ void AppFft::onRunning()
         return;
     }
 
+    if (GetHAL().isScreenSleeping()) {
+        return;
+    }
+
     GetHAL().updateAudioSpectrum();
 
     LvglLockGuard lock;

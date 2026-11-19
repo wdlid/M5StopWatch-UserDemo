@@ -54,7 +54,8 @@ public:
 private:
     std::unique_ptr<PercentageAdjustView> _view;
     int _applied_brightness = 0;
-    bool _save_requested    = false;
+    int _initial_brightness = 0;
+    bool _saved             = false;
 };
 
 /**
@@ -103,8 +104,9 @@ public:
 
 private:
     std::unique_ptr<PercentageAdjustView> _view;
-    int _applied_volume  = 0;
-    bool _save_requested = false;
+    int _applied_volume = 0;
+    int _initial_volume = 0;
+    bool _saved         = false;
 };
 
 /**
@@ -122,6 +124,8 @@ private:
 
     std::unique_ptr<ButtonConfigView> _view;
     Hal::ButtonConfig _applied_config;
+    Hal::ButtonConfig _initial_config;
+    bool _saved = false;
 };
 
 /**
@@ -282,18 +286,19 @@ private:
         size_t totalBytes    = 0;
     };
 
+    struct CheckTaskContext;
+    struct OtaTaskContext;
+
     Step _step               = Step::CheckingWifi;
     Step _last_rendered_step = Step::None;
     UpdateInfo _info;
-    std::mutex _mutex;
 
-    std::atomic<bool> _abort_requested{false};
-    std::atomic<bool> _task_running{false};
-    std::atomic<void*> _http_client{nullptr};
-    TaskHandle_t _task_handle = nullptr;
+    std::shared_ptr<CheckTaskContext> _check_ctx;
+    std::shared_ptr<OtaTaskContext> _ota_ctx;
 
-    uint32_t _created_at = 0;
-    uint32_t _reboot_at  = 0;
+    uint32_t _created_at       = 0;
+    uint32_t _check_started_at = 0;
+    uint32_t _reboot_at        = 0;
 
     void _startCheckTask();
     void _startOtaTask();

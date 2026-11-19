@@ -319,6 +319,18 @@ void GeminiLiveClient::setStatusText(const std::string& text)
     _status_text = text;
 }
 
+void trim_utf8_prefix(std::string& s, std::size_t max_bytes)
+{
+    if (s.size() <= max_bytes) {
+        return;
+    }
+    std::size_t cut = s.size() - max_bytes;
+    while (cut < s.size() && (static_cast<uint8_t>(s[cut]) & 0xC0) == 0x80) {
+        ++cut;
+    }
+    s.erase(0, cut);
+}
+
 void GeminiLiveClient::appendUserTranscript(const std::string& text, bool replace)
 {
     std::lock_guard<std::mutex> lock(_text_mutex);
@@ -326,9 +338,7 @@ void GeminiLiveClient::appendUserTranscript(const std::string& text, bool replac
         _user_transcript = text;
     } else {
         _user_transcript += text;
-        if (_user_transcript.size() > 240) {
-            _user_transcript.erase(0, _user_transcript.size() - 240);
-        }
+        trim_utf8_prefix(_user_transcript, 240);
     }
 }
 
@@ -339,9 +349,7 @@ void GeminiLiveClient::appendModelTranscript(const std::string& text, bool repla
         _model_transcript = text;
     } else {
         _model_transcript += text;
-        if (_model_transcript.size() > 360) {
-            _model_transcript.erase(0, _model_transcript.size() - 360);
-        }
+        trim_utf8_prefix(_model_transcript, 360);
     }
 }
 

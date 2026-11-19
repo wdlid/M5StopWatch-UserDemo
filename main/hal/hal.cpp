@@ -73,7 +73,7 @@ void Hal::feedTheDog()
     wifi_tick();
     display_tick();
     eye_care_tick();
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(isScreenSleeping() ? 20 : 5));
 }
 
 std::array<uint8_t, 6> Hal::getFactoryMac()
@@ -120,10 +120,10 @@ void Hal::i2c_init()
         .scl_io_num    = I2C_SCL_PIN,
         .sda_pullup_en = true,
         .scl_pullup_en = true,
-        .master =
-            {
-                .clk_speed = 100000,
-            },
+            .master =
+                {
+                    .clk_speed = 400000,
+                },
         .clk_flags = 0,
     };
     _i2c_bus = i2c_bus_create(I2C_NUM_0, &conf);

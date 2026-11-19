@@ -49,6 +49,11 @@ void AppLauncher::onLauncherOpen()
 
 void AppLauncher::onLauncherRunning()
 {
+    if (GetHAL().isScreenSleeping()) {
+        GetHAL().updateButtonStates();
+        return;
+    }
+
     LvglLockGuard lock;
 
     uint32_t now = GetHAL().millis();

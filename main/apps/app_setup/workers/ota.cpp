@@ -99,6 +99,7 @@ public:
         _btn->label().setTextFont(&lv_font_montserrat_24);
         _btn->label().setTextColor(lv_color_hex(0xF8FAFC));
         _btn->label().align(LV_ALIGN_CENTER, 0, 0);
+        _btn->label().removeFlag(LV_OBJ_FLAG_CLICKABLE);
         _created_at = GetHAL().millis();
         _btn->onClick().connect([this]() {
             if (GetHAL().millis() - _created_at >= 400) {

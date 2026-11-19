@@ -110,13 +110,34 @@ void Hal::ioe_speaker_enable(bool enable)
     mclog::tagInfo(_tag, "set speaker {}", enable ? "enable" : "disable");
 
     if (enable) {
-        _ioe->digitalWrite(PY32_SPK_PA_PIN, 1);
+        if (_ioe) {
+            _ioe->digitalWrite(PY32_SPK_PA_PIN, 1);
+        }
         gpio_set_level(SPK_PA_PIN, 1);
         vTaskDelay(10 / portTICK_PERIOD_MS);
     } else {
-        _ioe->digitalWrite(PY32_SPK_PA_PIN, 0);
+        if (_ioe) {
+            _ioe->digitalWrite(PY32_SPK_PA_PIN, 0);
+        }
         gpio_set_level(SPK_PA_PIN, 0);
         vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
+
+void Hal::ioe_power_off()
+{
+    mclog::tagInfo(_tag, "power off peripherals");
+
+    stopVibrate();
+    gpio_set_level(SPK_PA_PIN, 0);
+
+    if (_ioe) {
+        _ioe->setPwmDuty(PY32_MOTOR_PWM_CHANNEL, 0, false, false);
+        _ioe->digitalWrite(PY32_SPK_PA_PIN, 0);
+        _ioe->digitalWrite(PY32_AU_EN_PIN, 0);
+        _ioe->digitalWrite(PY32_TP_RST_PIN, 0);
+        _ioe->digitalWrite(PY32_OLED_RST_PIN, 0);
+        _ioe->digitalWrite(PY32_L3B_EN_PIN, 0);
     }
 }
 
