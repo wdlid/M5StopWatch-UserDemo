@@ -9,7 +9,6 @@
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <hal/hal.h>
-#include <lv_demos.h>
 #include <apps/common/audio/audio.h>
 
 using namespace mooncake;

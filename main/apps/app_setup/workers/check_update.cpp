@@ -15,6 +15,8 @@
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #include <esp_https_ota.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_system.h>
 
 #include <cctype>
@@ -586,7 +588,7 @@ void CheckUpdateWorker::_startOtaTask()
             const std::string& url     = ctx->download_url;
             const size_t expected_size = ctx->expected_size;
 
-            mclog::tagInfo(_tag, "Starting HTTPS OTA from: {}", url);
+            mclog::tagInfo(_tag, "Starting HTTPS OTA download to storage: {}", url);
 
             esp_http_client_config_t http_config = {};
             http_config.url                      = url.c_str();
@@ -598,56 +600,119 @@ void CheckUpdateWorker::_startOtaTask()
             http_config.max_redirection_count    = 5;
             http_config.user_agent               = "M5StopWatch";
 
-            esp_https_ota_config_t ota_config = {};
-            ota_config.http_config            = &http_config;
-
-            esp_https_ota_handle_t ota_handle = nullptr;
-            esp_err_t err                     = esp_https_ota_begin(&ota_config, &ota_handle);
-            if (err != ESP_OK || ota_handle == nullptr) {
-                mclog::tagError(_tag, "esp_https_ota_begin failed: {}", esp_err_to_name(err));
+            constexpr const char* UPDATE_PATH = "/spiflash/update.bin";
+            FILE* f = fopen(UPDATE_PATH, "wb");
+            if (!f) {
+                mclog::tagError(_tag, "Failed to open {} for writing: {}", UPDATE_PATH, strerror(errno));
                 std::lock_guard<std::mutex> lk(ctx->mutex);
                 ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "OTA begin failed (" + std::string(esp_err_to_name(err)) + ")";
+                ctx->info.errorMsg = "Storage write error";
                 ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
 
+            esp_http_client_handle_t client = esp_http_client_init(&http_config);
+            if (!client) {
+                fclose(f);
+                remove(UPDATE_PATH);
+                mclog::tagError(_tag, "esp_http_client_init failed");
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::UpdateFailed;
+                ctx->info.errorMsg = "HTTP client error";
+                ctx->finished.store(true);
+                vTaskDelete(NULL);
+                return;
+            }
+
+            esp_err_t err = esp_http_client_open(client, 0);
+            if (err != ESP_OK) {
+                fclose(f);
+                remove(UPDATE_PATH);
+                esp_http_client_cleanup(client);
+                mclog::tagError(_tag, "esp_http_client_open failed: {}", esp_err_to_name(err));
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->result_step   = Step::UpdateFailed;
+                ctx->info.errorMsg = "Connection failed";
+                ctx->finished.store(true);
+                vTaskDelete(NULL);
+                return;
+            }
+
+            int content_len = esp_http_client_fetch_headers(client);
+            int total_len   = (content_len > 0) ? content_len : static_cast<int>(expected_size);
+            int read_total  = 0;
+            std::vector<char> buffer(4096);
+
             while (!ctx->abort_requested.load()) {
-                err = esp_https_ota_perform(ota_handle);
-                if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+                int r = esp_http_client_read(client, buffer.data(), buffer.size());
+                if (r < 0) {
+                    mclog::tagError(_tag, "Error reading HTTP stream");
+                    err = ESP_FAIL;
+                    break;
+                }
+                if (r == 0) {
+                    err = ESP_OK;
                     break;
                 }
 
-                int read_len  = esp_https_ota_get_image_len_read(ota_handle);
-                int total_len = esp_https_ota_get_image_size(ota_handle);
-                if (total_len <= 0 && expected_size > 0) {
-                    total_len = expected_size;
+                size_t written = fwrite(buffer.data(), 1, r, f);
+                if (written != static_cast<size_t>(r)) {
+                    mclog::tagError(_tag, "Failed to write data to storage");
+                    err = ESP_FAIL;
+                    break;
                 }
-                int progress = (total_len > 0) ? (read_len * 100 / total_len) : 0;
+
+                read_total += r;
+                int progress = (total_len > 0) ? (read_total * 100 / total_len) : 0;
                 if (progress > 100) progress = 100;
 
                 {
                     std::lock_guard<std::mutex> lk(ctx->mutex);
-                    ctx->info.bytesReceived = read_len;
+                    ctx->info.bytesReceived = read_total;
                     ctx->info.totalBytes    = total_len;
                     ctx->info.progress      = progress;
                 }
             }
 
+            fclose(f);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+
             if (ctx->abort_requested.load()) {
                 mclog::tagWarn(_tag, "OTA aborted by user");
-                esp_https_ota_abort(ota_handle);
+                remove(UPDATE_PATH);
                 ctx->finished.store(true);
                 vTaskDelete(NULL);
                 return;
             }
 
-            if (err == ESP_OK) {
-                if (esp_https_ota_is_complete_data_received(ota_handle)) {
-                    esp_err_t finish_err = esp_https_ota_finish(ota_handle);
-                    if (finish_err == ESP_OK) {
-                        mclog::tagInfo(_tag, "OTA update successfully completed");
+            if (err == ESP_OK && read_total > 100 * 1024) {
+                // Verify magic byte (0xE9)
+                FILE* check_f = fopen(UPDATE_PATH, "rb");
+                uint8_t magic = 0;
+                if (check_f) {
+                    fread(&magic, 1, 1, check_f);
+                    fclose(check_f);
+                }
+                if (magic != 0xE9) {
+                    mclog::tagError(_tag, "Invalid firmware magic byte: 0x{:02X}", magic);
+                    remove(UPDATE_PATH);
+                    std::lock_guard<std::mutex> lk(ctx->mutex);
+                    ctx->result_step   = Step::UpdateFailed;
+                    ctx->info.errorMsg = "Invalid firmware file";
+                    ctx->finished.store(true);
+                    vTaskDelete(NULL);
+                    return;
+                }
+
+                // Staged update successfully downloaded! Set boot partition to ota_1 (Recovery)
+                const esp_partition_t* ota_1 =
+                    esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+                if (ota_1) {
+                    esp_err_t set_boot_err = esp_ota_set_boot_partition(ota_1);
+                    if (set_boot_err == ESP_OK) {
+                        mclog::tagInfo(_tag, "Update staged. Boot partition set to ota_1 (Recovery)");
                         std::lock_guard<std::mutex> lk(ctx->mutex);
                         ctx->result_step   = Step::UpdateSuccess;
                         ctx->info.progress = 100;
@@ -655,22 +720,19 @@ void CheckUpdateWorker::_startOtaTask()
                         vTaskDelete(NULL);
                         return;
                     } else {
-                        mclog::tagError(_tag, "esp_https_ota_finish failed: {}", esp_err_to_name(finish_err));
-                        err = finish_err;
+                        mclog::tagError(_tag, "Failed to set boot partition: {}", esp_err_to_name(set_boot_err));
                     }
                 } else {
-                    mclog::tagError(_tag, "Incomplete data received in OTA");
-                    err = ESP_ERR_INVALID_SIZE;
+                    mclog::tagError(_tag, "ota_1 partition not found");
                 }
             }
 
-            esp_https_ota_abort(ota_handle);
+            remove(UPDATE_PATH);
             {
                 std::lock_guard<std::mutex> lk(ctx->mutex);
                 ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "OTA failed (" + std::string(esp_err_to_name(err)) + ")";
+                ctx->info.errorMsg = "Download incomplete";
             }
-
             ctx->finished.store(true);
             vTaskDelete(NULL);
         },

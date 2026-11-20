@@ -4,49 +4,37 @@
  * SPDX-License-Identifier: MIT
  */
 #include "view.h"
+#include "gemini_lottie_assets.h"
 #include <assets/assets.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <esp_heap_caps.h>
 
 namespace {
 
 using namespace view;
 using namespace uitk::lvgl_cpp;
 
-void mist_draw_event_cb(lv_event_t* e);
-
 constexpr int _panel_size = 466;
-constexpr int _num_sectors = 36;
-constexpr int _deg_per_sector = 360 / _num_sectors;
-
-int32_t norm_deg(int32_t deg)
-{
-    deg %= 360;
-    if (deg < 0) {
-        deg += 360;
-    }
-    return deg;
-}
-
-int32_t get_cos(int32_t deg, int32_t amplitude)
-{
-    deg = norm_deg(deg);
-    int32_t result = lv_trigo_cos(deg) * amplitude;
-    result += LV_TRIGO_SIN_MAX / 2;
-    return result >> LV_TRIGO_SHIFT;
-}
-
-int32_t get_sin(int32_t deg, int32_t amplitude)
-{
-    deg = norm_deg(deg);
-    int32_t result = lv_trigo_sin(deg) * amplitude;
-    return (result + LV_TRIGO_SIN_MAX / 2) >> LV_TRIGO_SHIFT;
-}
 
 }  // namespace
 
 namespace view {
+
+GeminiView::GeminiView() = default;
+
+GeminiView::~GeminiView()
+{
+    if (_lottie_obj) {
+        lv_obj_del(_lottie_obj);
+        _lottie_obj = nullptr;
+    }
+    if (_lottie_buf) {
+        free(_lottie_buf);
+        _lottie_buf = nullptr;
+    }
+}
 
 void GeminiView::init(lv_obj_t* parent)
 {
@@ -61,19 +49,18 @@ void GeminiView::init(lv_obj_t* parent)
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-    // Dynamic mist canvas covering the entire viewport
-    _mist_canvas = std::make_unique<Container>(_panel->get());
-    _mist_canvas->align(LV_ALIGN_CENTER, 0, 0);
-    _mist_canvas->setSize(_panel_size, _panel_size);
-    _mist_canvas->setRadius(0);
-    _mist_canvas->setBorderWidth(0);
-    _mist_canvas->setPaddingAll(0);
-    _mist_canvas->setBgOpa(LV_OPA_TRANSP);
-    _mist_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _mist_canvas->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_add_event_cb(_mist_canvas->get(), mist_draw_event_cb, LV_EVENT_ALL, this);
-    lv_obj_refresh_ext_draw_size(_mist_canvas->get());
+    // High performance Lottie vector animation for Google Assistant / Gemini
+    static constexpr int _lottie_size       = 200;
+    static constexpr size_t _lottie_buf_size = _lottie_size * _lottie_size * 4;
+    _lottie_buf = static_cast<uint8_t*>(heap_caps_malloc(_lottie_buf_size, MALLOC_CAP_SPIRAM));
+    if (_lottie_buf) {
+        _lottie_obj = lv_lottie_create(_panel->get());
+        lv_lottie_set_buffer(_lottie_obj, _lottie_size, _lottie_size, _lottie_buf);
+        lv_obj_align(_lottie_obj, LV_ALIGN_CENTER, 0, -10);
+        lv_obj_remove_flag(_lottie_obj, LV_OBJ_FLAG_CLICKABLE);
+        lv_lottie_set_src_data(_lottie_obj, lottie_gemini_listening, lottie_gemini_listening_size);
+        _active_lottie_mode = 0;
+    }
 
     // Center interactive touch target for pattern hold-to-talk
     _pattern_touch = std::make_unique<Container>(_panel->get());
@@ -185,6 +172,28 @@ void GeminiView::setState(gemini::SessionState state, bool isTalking, bool webCo
             _web_box->moveForeground();
         }
     }
+
+    if (_lottie_obj) {
+        int target_mode = 0;  // 0: listening/idle, 1: thinking, 2: speaking
+        if (state == gemini::SessionState::Thinking) {
+            target_mode = 1;
+        } else if (state == gemini::SessionState::Speaking) {
+            target_mode = 2;
+        } else {
+            target_mode = 0;  // Listening / Ready / Connected / Disconnected
+        }
+
+        if (target_mode != _active_lottie_mode) {
+            _active_lottie_mode = target_mode;
+            if (_active_lottie_mode == 0) {
+                lv_lottie_set_src_data(_lottie_obj, lottie_gemini_listening, lottie_gemini_listening_size);
+            } else if (_active_lottie_mode == 1) {
+                lv_lottie_set_src_data(_lottie_obj, lottie_gemini_thinking, lottie_gemini_thinking_size);
+            } else if (_active_lottie_mode == 2) {
+                lv_lottie_set_src_data(_lottie_obj, lottie_gemini_speaking, lottie_gemini_speaking_size);
+            }
+        }
+    }
 }
 
 void GeminiView::setStatusText(const std::string& status)
@@ -270,261 +279,16 @@ void GeminiView::update()
 
     updateReducedBands();
 
-    // Invalidate canvas to render the next frame of the living mist pattern
-    if (_mist_canvas) {
-        lv_obj_invalidate(_mist_canvas->get());
+    // Voice-energy audio dynamic animation modulation
+    if (_lottie_obj && (_is_talking || _state == gemini::SessionState::Speaking)) {
+        lv_anim_t* anim = lv_lottie_get_anim(_lottie_obj);
+        if (anim) {
+            int32_t base_duration = (_active_lottie_mode == 2) ? 1200 : 2000;
+            int32_t active_duration =
+                base_duration - static_cast<int32_t>(_smooth_level * (base_duration * 0.40f));
+            lv_anim_set_duration(anim, std::max<int32_t>(active_duration, 600));
+        }
     }
 }
 
 }  // namespace view
-
-namespace {
-
-void mist_draw_event_cb(lv_event_t* e)
-{
-    auto* view = static_cast<GeminiView*>(lv_event_get_user_data(e));
-    if (view == nullptr) {
-        return;
-    }
-
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_REFR_EXT_DRAW_SIZE) {
-        lv_event_set_ext_draw_size(e, 180);
-        return;
-    }
-
-    if (code == LV_EVENT_COVER_CHECK) {
-        lv_event_set_cover_res(e, LV_COVER_RES_NOT_COVER);
-        return;
-    }
-
-    if (code != LV_EVENT_DRAW_MAIN_BEGIN) {
-        return;
-    }
-
-    lv_obj_t* obj     = lv_event_get_target_obj(e);
-    lv_layer_t* layer = lv_event_get_layer(e);
-    lv_opa_t obj_opa  = lv_obj_get_style_opa_recursive(obj, LV_PART_MAIN);
-    if (obj_opa <= LV_OPA_MIN) {
-        return;
-    }
-
-    lv_area_t coords;
-    lv_obj_get_coords(obj, &coords);
-
-    lv_point_t center = {
-        static_cast<lv_coord_t>(coords.x1 + lv_obj_get_width(obj) / 2),
-        static_cast<lv_coord_t>(coords.y1 + lv_obj_get_height(obj) / 2),
-    };
-
-    const float level  = view->smoothLevel();
-    const float pitch  = view->smoothPitch();
-    const auto& bands  = view->reducedBands();
-    const float bass   = bands[0];
-    const float low_m  = bands[1];
-    const float high_m = bands[2];
-    const float treble = bands[3];
-    const uint32_t tick = view->animTick();
-
-    const bool is_talking  = view->isTalking() || view->isPatternPressed();
-    const bool web_active  = view->isWebConfigActive();
-    const auto state       = view->state();
-
-    // Determine color theme based on conversational state
-    uint32_t col_outer = 0x0C2340;
-    uint32_t col_mid_1 = 0x0284C7;
-    uint32_t col_mid_2 = 0x0EA5E9;
-    uint32_t col_inner = 0x38BDF8;
-    uint32_t col_core  = 0xBAE6FD;
-
-    if (web_active) {
-        col_outer = 0x4C1D95;
-        col_mid_1 = 0x7C3AED;
-        col_mid_2 = 0xA855F7;
-        col_inner = 0xC084FC;
-        col_core  = 0xEDE9FE;
-    } else if (is_talking || state == gemini::SessionState::Listening) {
-        // High-energy electric cyan & radiant white mist for voice input
-        col_outer = 0x0E7490;
-        col_mid_1 = 0x06B6D4;
-        col_mid_2 = 0x22D3EE;
-        col_inner = 0x67E8F9;
-        col_core  = 0xFFFFFF;
-    } else if (state == gemini::SessionState::Speaking) {
-        // Luminous aurora shifting with AI voice pitch and harmonic energy
-        uint8_t pitch_mix = static_cast<uint8_t>(std::clamp(pitch * 255.0f, 0.0f, 255.0f));
-        col_outer = 0x1E3A8A;
-        col_mid_1 = 0x3B82F6;
-        col_mid_2 = 0xF59E0B;
-        col_inner = lv_color_to_int(lv_color_mix(lv_color_hex(0x67E8F9), lv_color_hex(0xFCD34D), pitch_mix));
-        col_core  = 0xFFFFF5;
-    } else if (state == gemini::SessionState::Thinking) {
-        // Mystic deep violet & purple nebula swirl
-        col_outer = 0x3B0764;
-        col_mid_1 = 0x6366F1;
-        col_mid_2 = 0x9333EA;
-        col_inner = 0xA855F7;
-        col_core  = 0xF5F3FF;
-    } else if (state == gemini::SessionState::Error) {
-        // Soft rose / coral mist
-        col_outer = 0x7F1D1D;
-        col_mid_1 = 0xDC2626;
-        col_mid_2 = 0xEF4444;
-        col_inner = 0xF87171;
-        col_core  = 0xFEE2E2;
-    }
-
-    // Organic idle breath and harmonic rotation speed
-    int breath = get_sin(static_cast<int32_t>(tick * 3), 7) + 7;
-    int base_rot_speed = 2 + static_cast<int>(pitch * 3.5f);
-    if (state == gemini::SessionState::Thinking) {
-        base_rot_speed = 6;
-    }
-    int32_t rot = norm_deg(static_cast<int32_t>(tick * base_rot_speed));
-
-    int base_r = 82 + static_cast<int>(level * 52.0f + bass * 26.0f) + breath;
-
-    // Radii buffers for the multi-layered mist cloud
-    std::array<int, _num_sectors> r_mid;
-    std::array<int, _num_sectors> r_out;
-    std::array<int, _num_sectors> r_in;
-
-    for (int i = 0; i < _num_sectors; ++i) {
-        int32_t deg = i * _deg_per_sector;
-
-        // Wave 1: 2 lobes driven by bass
-        int32_t h1 = get_cos(2 * deg + rot, 8 + static_cast<int>(bass * 26.0f));
-        // Wave 2: 3 lobes driven by voice fundamental / low-mid
-        int32_t h2 = get_sin(3 * deg - rot * 2, 6 + static_cast<int>(low_m * 20.0f));
-        // Wave 3: 5 lobes driven by speech formants / high-mid and pitch
-        int32_t h3 = get_cos(5 * deg + rot * 3, 4 + static_cast<int>(high_m * 14.0f + pitch * 10.0f));
-        // Wave 4: 7 lobes driven by treble fine mist shimmer
-        int32_t h4 = get_sin(7 * deg - rot, 2 + static_cast<int>(treble * 10.0f));
-
-        int rad = base_r + (h1 + h2 + h3 + h4);
-        r_mid[i] = std::max(rad, 40);
-        r_out[i] = static_cast<int>(r_mid[i] * 1.34f + 16);
-        r_in[i]  = static_cast<int>(r_mid[i] * 0.70f);
-    }
-
-    lv_draw_triangle_dsc_t draw_dsc;
-    lv_draw_triangle_dsc_init(&draw_dsc);
-
-    // -------------------------------------------------------------
-    // Layer 1: Outer diffuse mist halo (ethereal foggy haze)
-    // -------------------------------------------------------------
-    draw_dsc.opa   = LV_OPA_30;
-    draw_dsc.color = lv_color_hex(col_outer);
-
-    for (int i = 0; i < _num_sectors; ++i) {
-        int next_i = (i + 1) % _num_sectors;
-        int32_t deg1 = i * _deg_per_sector;
-        int32_t deg2 = next_i * _deg_per_sector;
-
-        draw_dsc.p[0].x = center.x;
-        draw_dsc.p[0].y = center.y;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_out[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_out[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_out[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_out[next_i]);
-        lv_draw_triangle(layer, &draw_dsc);
-    }
-
-    // -------------------------------------------------------------
-    // Layer 2: Middle flowing mist nebula (fluid organic cloud)
-    // -------------------------------------------------------------
-    draw_dsc.opa = LV_OPA_60;
-
-    for (int i = 0; i < _num_sectors; ++i) {
-        int next_i = (i + 1) % _num_sectors;
-        int32_t deg1 = i * _deg_per_sector;
-        int32_t deg2 = next_i * _deg_per_sector;
-
-        uint8_t mix = static_cast<uint8_t>((get_cos(deg1 * 2 + rot, 127) + 128));
-        draw_dsc.color = lv_color_mix(lv_color_hex(col_mid_2), lv_color_hex(col_mid_1), mix);
-
-        draw_dsc.p[0].x = center.x;
-        draw_dsc.p[0].y = center.y;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_mid[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_mid[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_mid[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_mid[next_i]);
-        lv_draw_triangle(layer, &draw_dsc);
-    }
-
-    // -------------------------------------------------------------
-    // Layer 3: Inner swirling mist aura (luminous depth layer)
-    // -------------------------------------------------------------
-    draw_dsc.opa   = LV_OPA_80;
-    draw_dsc.color = lv_color_hex(col_inner);
-    const int32_t angle_offset = 25;
-
-    for (int i = 0; i < _num_sectors; ++i) {
-        int next_i = (i + 1) % _num_sectors;
-        int32_t deg1 = i * _deg_per_sector + angle_offset;
-        int32_t deg2 = next_i * _deg_per_sector + angle_offset;
-
-        draw_dsc.p[0].x = center.x;
-        draw_dsc.p[0].y = center.y;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_in[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_in[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_in[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_in[next_i]);
-        lv_draw_triangle(layer, &draw_dsc);
-    }
-
-    // -------------------------------------------------------------
-    // Layer 4: Center radiant core (pulsing heart of the orb)
-    // -------------------------------------------------------------
-    int core_r = 38 + static_cast<int>(level * 16.0f + bass * 12.0f);
-    draw_dsc.opa   = LV_OPA_COVER;
-    draw_dsc.color = lv_color_hex(col_core);
-
-    for (int i = 0; i < _num_sectors; ++i) {
-        int next_i = (i + 1) % _num_sectors;
-        int32_t deg1 = i * _deg_per_sector;
-        int32_t deg2 = next_i * _deg_per_sector;
-
-        draw_dsc.p[0].x = center.x;
-        draw_dsc.p[0].y = center.y;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, core_r);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, core_r);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, core_r);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, core_r);
-        lv_draw_triangle(layer, &draw_dsc);
-    }
-
-    // -------------------------------------------------------------
-    // Layer 5: Center Gemini four-pointed sparkle
-    // -------------------------------------------------------------
-    int spark_len   = 16 + static_cast<int>(level * 12.0f + breath * 0.4f);
-    int spark_thick = 4;
-    draw_dsc.opa    = LV_OPA_COVER;
-    draw_dsc.color  = lv_color_hex(0xFFFFFF);
-
-    // Top point
-    draw_dsc.p[0] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y - spark_len)};
-    draw_dsc.p[1] = {static_cast<lv_coord_t>(center.x - spark_thick), static_cast<lv_coord_t>(center.y)};
-    draw_dsc.p[2] = {static_cast<lv_coord_t>(center.x + spark_thick), static_cast<lv_coord_t>(center.y)};
-    lv_draw_triangle(layer, &draw_dsc);
-
-    // Bottom point
-    draw_dsc.p[0] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y + spark_len)};
-    draw_dsc.p[1] = {static_cast<lv_coord_t>(center.x - spark_thick), static_cast<lv_coord_t>(center.y)};
-    draw_dsc.p[2] = {static_cast<lv_coord_t>(center.x + spark_thick), static_cast<lv_coord_t>(center.y)};
-    lv_draw_triangle(layer, &draw_dsc);
-
-    // Left point
-    draw_dsc.p[0] = {static_cast<lv_coord_t>(center.x - spark_len), static_cast<lv_coord_t>(center.y)};
-    draw_dsc.p[1] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y - spark_thick)};
-    draw_dsc.p[2] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y + spark_thick)};
-    lv_draw_triangle(layer, &draw_dsc);
-
-    // Right point
-    draw_dsc.p[0] = {static_cast<lv_coord_t>(center.x + spark_len), static_cast<lv_coord_t>(center.y)};
-    draw_dsc.p[1] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y - spark_thick)};
-    draw_dsc.p[2] = {static_cast<lv_coord_t>(center.x), static_cast<lv_coord_t>(center.y + spark_thick)};
-    lv_draw_triangle(layer, &draw_dsc);
-}
-
-}  // namespace

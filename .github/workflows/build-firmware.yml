@@ -63,8 +63,7 @@ jobs:
 
           git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
           git tag -f -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
-          git push origin HEAD:${GITHUB_REF}
-          git push origin --force "${NEW_TAG}"
+          git push origin HEAD:${GITHUB_REF} "refs/tags/${NEW_TAG}"
 
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
@@ -105,15 +104,18 @@ jobs:
 
       - name: Build firmware with PlatformIO
         run: |
-          pio run
+          pio run -e m5stack-stopwatch
+          pio run -e m5stack-stopwatch-recovery
 
       - name: Prepare firmware distribution & factory binary
         run: |
           mkdir -p dist
           BUILD_DIR=".pio/build/m5stack-stopwatch"
+          BUILD_REC_DIR=".pio/build/m5stack-stopwatch-recovery"
           
           # Copy standalone binaries
           cp "${BUILD_DIR}/firmware.bin" dist/firmware-ota.bin
+          cp "${BUILD_REC_DIR}/firmware.bin" dist/recovery.bin
           cp "${BUILD_DIR}/bootloader.bin" dist/bootloader.bin
           cp "${BUILD_DIR}/partitions.bin" dist/partitions.bin
           if [ -f "${BUILD_DIR}/ota_data_initial.bin" ]; then
@@ -122,13 +124,8 @@ jobs:
           
           # Generate complete factory image (flashable directly at 0x0)
           # Note: ESP32-S3 with Octal PSRAM requires DIO flash mode, not QIO.
-          python -m esptool --chip esp32s3 merge_bin \
-            -o dist/m5stopwatch-factory-0x0.bin \
-            --flash_mode dio --flash_freq 80m --flash_size 16MB \
-            0x0 "${BUILD_DIR}/bootloader.bin" \
-            0x8000 "${BUILD_DIR}/partitions.bin" \
-            0xd000 "${BUILD_DIR}/ota_data_initial.bin" \
-            0x20000 "${BUILD_DIR}/firmware.bin"
+          python3 scripts/merge_factory_bin.py
+          cp m5stopwatch-factory-0x0.bin dist/m5stopwatch-factory-0x0.bin
           
           # Generate SHA256 checksums
           cd dist
@@ -161,14 +158,16 @@ jobs:
 
             ### 刷入说明 / How to Flash:
             - **`m5stopwatch-factory-0x0.bin` (USB 线刷 / 初次烧录推荐)**:
-              全合一固件（包含 bootloader + 分区表 + 固件）。
+              全合一出厂固件（包含 bootloader + 分区表 + 主固件 + 极简 Recovery 救砖系统）。
               使用 esptool 烧录到 `0x0` 地址：
               ```bash
               esptool.py --chip esp32s3 write_flash 0x0 m5stopwatch-factory-0x0.bin
               ```
               或直接在网页烧录器（ESP Web Flasher / M5Burner）选择此文件单文件烧录。
             - **`firmware-ota.bin` (OTA 无线升级专用)**:
-              在手表上进入 **Settings -> Firmware -> OTA Update**，在手机/电脑浏览器打开屏幕显示的地址（如 `http://192.168.4.1/ota`），上传此文件即可自动完成 OTA 升级并重启。
+              主应用固件升级包（烧录至 `0x20000`）。在手表设置中检查更新自动下载，或进入 Web OTA 上传升级。
+            - **`recovery.bin` (Recovery 恢复固件专用)**:
+              极简恢复固件（烧录至 `0x5A0000`）。
 
   build-esp-idf:
     name: Build (ESP-IDF v5.5)
@@ -198,25 +197,36 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           idf.py build
+          BUILD_RECOVERY=1 idf.py -B build_recovery build
 
       - name: Prepare ESP-IDF artifacts
         run: |
           . $IDF_PATH/export.sh
           mkdir -p dist-idf
           cp build/StopWatch-UserDemo.bin dist-idf/firmware-ota.bin
+          if [ -f build_recovery/StopWatch-UserDemo.bin ]; then
+            cp build_recovery/StopWatch-UserDemo.bin dist-idf/recovery.bin
+          fi
           cp build/bootloader/bootloader.bin dist-idf/bootloader.bin
           cp build/partition_table/partition-table.bin dist-idf/partitions.bin
           if [ -f build/ota_data_initial.bin ]; then
             cp build/ota_data_initial.bin dist-idf/ota_data_initial.bin
           fi
 
-          python -m esptool --chip esp32s3 merge_bin \
-            -o dist-idf/m5stopwatch-factory-0x0.bin \
-            --flash_mode dio --flash_freq 80m --flash_size 16MB \
-            0x0 build/bootloader/bootloader.bin \
-            0x8000 build/partition_table/partition-table.bin \
-            0xd000 build/ota_data_initial.bin \
+          MERGE_ARGS=(
+            --chip esp32s3 merge_bin
+            -o dist-idf/m5stopwatch-factory-0x0.bin
+            --flash_mode dio --flash_freq 80m --flash_size 16MB
+            0x0 build/bootloader/bootloader.bin
+            0x8000 build/partition_table/partition-table.bin
+            0xd000 build/ota_data_initial.bin
             0x20000 build/StopWatch-UserDemo.bin
+          )
+          if [ -f build_recovery/StopWatch-UserDemo.bin ]; then
+            MERGE_ARGS+=(0x5A0000 build_recovery/StopWatch-UserDemo.bin)
+          fi
+
+          python -m esptool "${MERGE_ARGS[@]}"
 
           cd dist-idf
           sha256sum * > SHA256SUMS

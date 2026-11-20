@@ -22,16 +22,12 @@ struct DohEchOptions {
     bool dohEnabled = true;
     std::string dohUrl1 = "https://edge.1molchuan.top/linuxdo";
     std::string dohUrl2 = "https://edge.1molchuan.top/plus";
-    bool echEnabled = true;
-    std::string echConfigDomain = "cloudflare-ech.com";
-    std::string staticEchConfigB64 = "";
     std::string connectIp = "";
 };
 
 struct DnsLookupResult {
     std::vector<std::string> ipv4Addrs;
     std::vector<std::string> ipv4Hints;
-    std::vector<uint8_t> echConfigList;
 
     void merge(const DnsLookupResult& other);
     std::string firstIpv4() const;
@@ -39,9 +35,6 @@ struct DnsLookupResult {
 
 struct ResolvedEndpoint {
     std::vector<std::string> candidateIps;
-    std::vector<uint8_t> echConfigList;
-    std::string publicName = "cloudflare-ech.com";
-    bool echFromFallback = false;
 };
 
 // RFC 8484 DNS wireformat helpers

@@ -44,14 +44,10 @@ struct EndpointCache {
     std::string dohUrl1;
     std::string dohUrl2;
     std::string connectIp;
-    std::string echConfigDomain;
-    std::string staticEchConfigB64;
     bool dohEnabled = false;
-    bool echEnabled = false;
     uint32_t resolvedAtMs = 0;
     ResolvedEndpoint endpoint;
     std::string preferredIp;
-    std::string preferredSni;
 };
 
 EndpointCache& get_endpoint_cache()
@@ -66,22 +62,7 @@ uint32_t now_ms()
 }
 
 constexpr uint16_t DNS_TYPE_A     = 1;
-constexpr uint16_t DNS_TYPE_HTTPS = 65;
 constexpr uint16_t DNS_CLASS_IN   = 1;
-
-// Standard Cloudflare `cloudflare-ech.com` V18 (0xfe0d) EchConfigList fallback bytes (71 bytes)
-constexpr uint8_t FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST[] = {
-    0x00, 0x45, 0xfe, 0x0d, 0x00, 0x41, 0x8a, 0x00, 0x20, 0x00, 0x20, 0xd4, 0x8b, 0x79, 0xb3, 0x96, 0xda, 0xc8,
-    0xcd, 0x4c, 0xa7, 0xc4, 0x2a, 0x23, 0x68, 0x5a, 0x20, 0x11, 0x86, 0x3a, 0x5c, 0xbc, 0x28, 0x34, 0x4c, 0x92,
-    0x77, 0x6a, 0xc3, 0x90, 0xf0, 0x53, 0x06, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x00, 0x12, 0x63, 0x6c, 0x6f,
-    0x75, 0x64, 0x66, 0x6c, 0x61, 0x72, 0x65, 0x2d, 0x65, 0x63, 0x68, 0x2e, 0x63, 0x6f, 0x6d, 0x00, 0x00,
-};
-
-constexpr const char* FALLBACK_CLOUDFLARE_IPS[] = {
-    "172.64.229.205",
-    "172.64.229.94",
-    "104.16.132.229",
-};
 
 uint16_t read_u16_be(const uint8_t* p)
 {
@@ -137,65 +118,6 @@ std::string base64url_encode_no_pad(const uint8_t* data, std::size_t len)
         out.pop_back();
     }
     return out;
-}
-
-bool decode_base64_flexible(const std::string& input, std::vector<uint8_t>& out)
-{
-    std::string clean;
-    clean.reserve(input.size() + 4);
-    for (char c : input) {
-        if (std::isspace(static_cast<unsigned char>(c))) continue;
-        if (c == '-') clean.push_back('+');
-        else if (c == '_') clean.push_back('/');
-        else clean.push_back(c);
-    }
-    if (clean.empty()) return false;
-    while (clean.size() % 4 != 0) {
-        clean.push_back('=');
-    }
-
-    std::size_t olen = 0;
-    mbedtls_base64_decode(nullptr, 0, &olen, reinterpret_cast<const unsigned char*>(clean.data()), clean.size());
-    out.resize(olen + 4);
-    if (mbedtls_base64_decode(out.data(), out.size(), &olen, reinterpret_cast<const unsigned char*>(clean.data()),
-                              clean.size()) != 0) {
-        out.clear();
-        return false;
-    }
-    out.resize(olen);
-    return !out.empty();
-}
-
-// Extract public_name from V18 (0xfe0d) EchConfigList bytes
-std::string parse_ech_public_name(const std::vector<uint8_t>& echBytes)
-{
-    if (echBytes.size() < 16) {
-        return "cloudflare-ech.com";
-    }
-    std::size_t pos = 2;  // skip list length u16
-    if (pos + 4 > echBytes.size()) return "cloudflare-ech.com";
-    uint16_t version = read_u16_be(&echBytes[pos]);
-    uint16_t length  = read_u16_be(&echBytes[pos + 2]);
-    pos += 4;
-    if (version != 0xfe0d || pos + length > echBytes.size() || length < 10) {
-        return "cloudflare-ech.com";
-    }
-    // Inside V18 EchConfigContents:
-    // config_id (1) + kem_id (2) + public_key_len (2) + public_key + cipher_suites_len (2) + cipher_suites + max_name_len (1) + public_name_len (1) + public_name
-    pos += 1 + 2;
-    if (pos + 2 > echBytes.size()) return "cloudflare-ech.com";
-    uint16_t pk_len = read_u16_be(&echBytes[pos]);
-    pos += 2 + pk_len;
-    if (pos + 2 > echBytes.size()) return "cloudflare-ech.com";
-    uint16_t cs_len = read_u16_be(&echBytes[pos]);
-    pos += 2 + cs_len;
-    if (pos + 2 > echBytes.size()) return "cloudflare-ech.com";
-    pos += 1;  // maximum_name_length
-    uint8_t name_len = echBytes[pos++];
-    if (name_len > 0 && pos + name_len <= echBytes.size()) {
-        return std::string(reinterpret_cast<const char*>(&echBytes[pos]), name_len);
-    }
-    return "cloudflare-ech.com";
 }
 
 bool is_google_direct_domain(const std::string& host)
@@ -373,9 +295,6 @@ void DnsLookupResult::merge(const DnsLookupResult& other)
             ipv4Hints.push_back(ip);
         }
     }
-    if (echConfigList.empty() && !other.echConfigList.empty()) {
-        echConfigList = other.echConfigList;
-    }
 }
 
 std::string DnsLookupResult::firstIpv4() const
@@ -468,40 +387,6 @@ bool parseDnsResponse(const uint8_t* packet, std::size_t len, DnsLookupResult& o
                 outResult.ipv4Addrs.end()) {
                 outResult.ipv4Addrs.push_back(ip_str);
             }
-        } else if (rtype == DNS_TYPE_HTTPS && rdlength >= 3) {
-            std::size_t r_off = 2;  // skip SvcPriority
-            if (!skip_dns_name(rdata, rdlength, r_off)) {
-                continue;
-            }
-            while (r_off + 4 <= rdlength) {
-                uint16_t param_key = read_u16_be(rdata + r_off);
-                uint16_t param_len = read_u16_be(rdata + r_off + 2);
-                r_off += 4;
-                if (r_off + param_len > rdlength) {
-                    break;
-                }
-                const uint8_t* val = rdata + r_off;
-                r_off += param_len;
-
-                if (param_key == 4) {
-                    // ipv4hint
-                    for (std::size_t k = 0; k + 4 <= param_len; k += 4) {
-                        char ip_buf[20] = {};
-                        std::snprintf(ip_buf, sizeof(ip_buf), "%u.%u.%u.%u", val[k], val[k + 1], val[k + 2],
-                                      val[k + 3]);
-                        std::string ip_str(ip_buf);
-                        if (std::find(outResult.ipv4Hints.begin(), outResult.ipv4Hints.end(), ip_str) ==
-                            outResult.ipv4Hints.end()) {
-                            outResult.ipv4Hints.push_back(ip_str);
-                        }
-                    }
-                } else if (param_key == 5) {
-                    // ech (EchConfigList bytes)
-                    if (param_len > 0 && outResult.echConfigList.empty()) {
-                        outResult.echConfigList.assign(val, val + param_len);
-                    }
-                }
-            }
         }
     }
 
@@ -515,7 +400,6 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         return false;
     }
     std::string host = targetHost;
-    const bool is_google = is_google_direct_domain(host);
 
     // Check in-memory endpoint cache (valid for 10 minutes while config matches)
     {
@@ -524,10 +408,8 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         const uint32_t now = now_ms();
         if (cache.resolvedAtMs != 0 && (now - cache.resolvedAtMs) < 600000 &&
             cache.host == host && cache.dohEnabled == opts.dohEnabled &&
-            cache.echEnabled == opts.echEnabled && cache.dohUrl1 == opts.dohUrl1 &&
-            cache.dohUrl2 == opts.dohUrl2 && cache.connectIp == opts.connectIp &&
-            cache.echConfigDomain == opts.echConfigDomain &&
-            cache.staticEchConfigB64 == opts.staticEchConfigB64 &&
+            cache.dohUrl1 == opts.dohUrl1 && cache.dohUrl2 == opts.dohUrl2 &&
+            cache.connectIp == opts.connectIp &&
             !cache.endpoint.candidateIps.empty()) {
             outEndpoint = cache.endpoint;
             if (!cache.preferredIp.empty()) {
@@ -545,15 +427,6 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         outEndpoint.candidateIps.push_back(opts.connectIp);
     }
 
-    // 2. Check static ECH config override
-    if (opts.echEnabled && !opts.staticEchConfigB64.empty()) {
-        std::vector<uint8_t> decoded;
-        if (decode_base64_flexible(opts.staticEchConfigB64, decoded)) {
-            outEndpoint.echConfigList = decoded;
-            outEndpoint.publicName    = parse_ech_public_name(decoded);
-        }
-    }
-
     std::vector<std::string> doh_urls;
     if (!opts.dohUrl1.empty()) doh_urls.push_back(opts.dohUrl1);
     if (!opts.dohUrl2.empty()) doh_urls.push_back(opts.dohUrl2);
@@ -562,75 +435,26 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         doh_urls.push_back("https://edge.1molchuan.top/plus");
     }
 
-    // Only perform DoH lookup if we don't already have a static connectIp override
+    // Perform DoH lookup for targetHost A record if no static connectIp is provided
     DnsLookupResult host_lookup;
     if (opts.dohEnabled && outEndpoint.candidateIps.empty()) {
         std::vector<DohBatchQuery> batch;
         batch.push_back({host, DNS_TYPE_A, &host_lookup});
-        if (opts.echEnabled && outEndpoint.echConfigList.empty()) {
-            batch.push_back({host, DNS_TYPE_HTTPS, &host_lookup});
-        }
 
         for (const auto& url : doh_urls) {
             if (doh_query_batch(url, batch)) {
                 break;
             }
         }
-
-        if (!host_lookup.echConfigList.empty()) {
-            outEndpoint.echConfigList = host_lookup.echConfigList;
-            outEndpoint.publicName    = parse_ech_public_name(outEndpoint.echConfigList);
-        }
     }
 
-    // Query cloudflare-ech.com only if we still have no candidate IPs for a non-Google domain
-    DnsLookupResult cf_lookup;
-    std::string ech_domain = opts.echConfigDomain.empty() ? "cloudflare-ech.com" : opts.echConfigDomain;
-    if (!is_google && opts.dohEnabled &&
-        outEndpoint.candidateIps.empty() && host_lookup.ipv4Addrs.empty() && host_lookup.ipv4Hints.empty()) {
-        std::vector<DohBatchQuery> cf_batch;
-        cf_batch.push_back({ech_domain, DNS_TYPE_A, &cf_lookup});
-        if (opts.echEnabled && outEndpoint.echConfigList.empty()) {
-            cf_batch.push_back({ech_domain, DNS_TYPE_HTTPS, &cf_lookup});
-        }
-        for (const auto& url : doh_urls) {
-            if (doh_query_batch(url, cf_batch)) {
-                break;
-            }
-        }
-
-        if (opts.echEnabled && outEndpoint.echConfigList.empty() && !cf_lookup.echConfigList.empty()) {
-            outEndpoint.echConfigList   = cf_lookup.echConfigList;
-            outEndpoint.publicName      = parse_ech_public_name(outEndpoint.echConfigList);
-            outEndpoint.echFromFallback = true;
-        }
-    }
-
-    // Built-in Cloudflare ECH fallback
-    if (opts.echEnabled && outEndpoint.echConfigList.empty() && !is_google) {
-        outEndpoint.echConfigList.assign(
-            FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST,
-            FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST + sizeof(FALLBACK_CLOUDFLARE_ECH_CONFIG_LIST));
-        outEndpoint.publicName      = ech_domain;
-        outEndpoint.echFromFallback = true;
-    }
-
-    // Populate candidate IPs
+    // Populate candidate IPs from DoH
     if (outEndpoint.candidateIps.empty()) {
         for (const auto& ip : host_lookup.ipv4Addrs) outEndpoint.candidateIps.push_back(ip);
         for (const auto& ip : host_lookup.ipv4Hints) {
             if (std::find(outEndpoint.candidateIps.begin(), outEndpoint.candidateIps.end(), ip) ==
                 outEndpoint.candidateIps.end()) {
                 outEndpoint.candidateIps.push_back(ip);
-            }
-        }
-        if (outEndpoint.candidateIps.empty() && !is_google) {
-            for (const auto& ip : cf_lookup.ipv4Addrs) outEndpoint.candidateIps.push_back(ip);
-            for (const auto& ip : cf_lookup.ipv4Hints) {
-                if (std::find(outEndpoint.candidateIps.begin(), outEndpoint.candidateIps.end(), ip) ==
-                    outEndpoint.candidateIps.end()) {
-                    outEndpoint.candidateIps.push_back(ip);
-                }
             }
         }
     }
@@ -653,26 +477,16 @@ bool resolveHostAndEch(const std::string& targetHost, const DohEchOptions& opts,
         }
     }
 
-    // Final Cloudflare Anycast IP fallback when ECH/Cloudflare mode is enabled
-    if (outEndpoint.candidateIps.empty() && !is_google) {
-        for (const char* ip : FALLBACK_CLOUDFLARE_IPS) {
-            outEndpoint.candidateIps.emplace_back(ip);
-        }
-    }
-
     if (!outEndpoint.candidateIps.empty()) {
         auto& cache = get_endpoint_cache();
         std::lock_guard<std::mutex> lock(cache.mutex);
-        cache.host               = host;
-        cache.dohEnabled         = opts.dohEnabled;
-        cache.echEnabled         = opts.echEnabled;
-        cache.dohUrl1            = opts.dohUrl1;
-        cache.dohUrl2            = opts.dohUrl2;
-        cache.connectIp          = opts.connectIp;
-        cache.echConfigDomain    = opts.echConfigDomain;
-        cache.staticEchConfigB64 = opts.staticEchConfigB64;
-        cache.resolvedAtMs       = now_ms();
-        cache.endpoint           = outEndpoint;
+        cache.host         = host;
+        cache.dohEnabled   = opts.dohEnabled;
+        cache.dohUrl1      = opts.dohUrl1;
+        cache.dohUrl2      = opts.dohUrl2;
+        cache.connectIp    = opts.connectIp;
+        cache.resolvedAtMs = now_ms();
+        cache.endpoint     = outEndpoint;
     }
 
     return !outEndpoint.candidateIps.empty();
@@ -871,13 +685,8 @@ bool EchWebSocketClient::performTlsHandshake(const std::string& targetHost,
     mbedtls_ssl_conf_rng(&_conf, mbedtls_ctr_drbg_random, &_ctr_drbg);
     esp_crt_bundle_attach(&_conf);
 
-    // When using outer SNI ("cloudflare-ech.com" or custom domain fronting) that differs from targetHost,
-    // verify the CA signature chain via esp_crt_bundle_attach while allowing the edge cert SAN (OPTIONAL)
-    if (!sniHostname.empty() && sniHostname != targetHost) {
-        mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
-    } else {
-        mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-    }
+    // Verify the CA signature chain against targetHost
+    mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 
 #ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
     if (preferTls13) {
@@ -1128,76 +937,46 @@ bool EchWebSocketClient::connect(const std::string& wsUrl,
         return false;
     }
 
-    const bool is_google = is_google_direct_domain(host);
-    // Determine SNI order:
-    // When ECH / outer SNI protection is enabled for a Cloudflare Worker domain (e.g. *.workers.dev),
-    // try the public ECH outer name ("cloudflare-ech.com") first so domestic DPI never sees *.workers.dev in plaintext SNI;
-    // if the edge requires direct SNI (e.g. custom domain), automatically fall back to `host` and remember the working SNI.
-    std::vector<std::string> sni_candidates;
-    if (_is_tls && opts.echEnabled && !is_google && !resolved.publicName.empty() && resolved.publicName != host) {
-        sni_candidates.push_back(resolved.publicName);
-        sni_candidates.push_back(host);
+    for (const auto& ip : resolved.candidateIps) {
+        if (_abort.load()) {
+            outError = "Aborted";
+            disconnect();
+            return false;
+        }
+
+        mclog::tagInfo(_tag, "Connecting TCP {}:{} (Host={}, SNI={})...", ip, port, host, host);
+        if (!openTcpSocket(ip, port, 2500)) {
+            outError = "TCP connect timeout to " + ip;
+            continue;
+        }
+
+        if (_is_tls) {
+            if (!performTlsHandshake(host, host, true, outError)) {
+                mclog::tagWarn(_tag, "TLS handshake failed with {} (SNI={}): {}", ip, host, outError);
+                disconnect();
+                continue;
+            }
+        }
+
+        if (!performWsUpgrade(host, path_and_query, bearerToken, apiKeyHeader, outError)) {
+            mclog::tagWarn(_tag, "WS upgrade failed with {} (SNI={}): {}", ip, host, outError);
+            disconnect();
+            if (outError.find("401") != std::string::npos || outError.find("403") != std::string::npos) {
+                return false;
+            }
+            continue;
+        }
+
         {
             auto& cache = get_endpoint_cache();
             std::lock_guard<std::mutex> lock(cache.mutex);
-            if (!cache.preferredSni.empty() && cache.host == host) {
-                auto it = std::find(sni_candidates.begin(), sni_candidates.end(), cache.preferredSni);
-                if (it != sni_candidates.end() && it != sni_candidates.begin()) {
-                    std::rotate(sni_candidates.begin(), it, it + 1);
-                }
-            }
+            cache.preferredIp = ip;
         }
-    } else {
-        sni_candidates.push_back(host);
-    }
 
-    for (const auto& ip : resolved.candidateIps) {
-        for (const auto& sni_name : sni_candidates) {
-            if (_abort.load()) {
-                outError = "Aborted";
-                disconnect();
-                return false;
-            }
-
-            mclog::tagInfo(_tag, "Connecting TCP {}:{} (Host={}, SNI={})...", ip, port, host, sni_name);
-            if (!openTcpSocket(ip, port, 2500)) {
-                outError = "TCP connect timeout to " + ip;
-                break;  // IP unreachable; skip remaining SNI candidates on this IP
-            }
-
-            if (_is_tls) {
-                if (!performTlsHandshake(host, sni_name, true, outError)) {
-                    mclog::tagWarn(_tag, "TLS handshake failed with {} (SNI={}): {}", ip, sni_name, outError);
-                    disconnect();
-                    continue;
-                }
-            }
-
-            if (!performWsUpgrade(host, path_and_query, bearerToken, apiKeyHeader, outError)) {
-                mclog::tagWarn(_tag, "WS upgrade failed with {} (SNI={}): {}", ip, sni_name, outError);
-                disconnect();
-                // If 401 or 403, check if this was with outer SNI (domain fronting)
-                if (outError.find("401") != std::string::npos || outError.find("403") != std::string::npos) {
-                    if (sni_name == host) {
-                        return false;
-                    }
-                    // Outer SNI (domain fronting) was rejected by CDN/gateway; continue and try direct host SNI!
-                }
-                continue;
-            }
-
-            {
-                auto& cache = get_endpoint_cache();
-                std::lock_guard<std::mutex> lock(cache.mutex);
-                cache.preferredIp  = ip;
-                cache.preferredSni = sni_name;
-            }
-
-            _connected    = true;
-            _connected_ip = ip;
-            mclog::tagInfo(_tag, "WebSocket connected via {} (SNI={})", ip, sni_name);
-            return true;
-        }
+        _connected    = true;
+        _connected_ip = ip;
+        mclog::tagInfo(_tag, "WebSocket connected via {} (SNI={})", ip, host);
+        return true;
     }
 
     // All candidate IPs failed; invalidate endpoint cache so next retry refreshes DNS

@@ -26,6 +26,9 @@ public:
     std::function<void()> onPatternClicked;
     std::function<void()> onExitWebConfigClicked;
 
+    GeminiView();
+    ~GeminiView();
+
     void init(lv_obj_t* parent);
     void setState(gemini::SessionState state, bool isTalking, bool webConfigActive);
     void setStatusText(const std::string& status);
@@ -71,7 +74,9 @@ public:
 
 private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
-    std::unique_ptr<uitk::lvgl_cpp::Container> _mist_canvas;
+    lv_obj_t* _lottie_obj       = nullptr;
+    uint8_t* _lottie_buf        = nullptr;
+    int _active_lottie_mode     = -1;
     std::unique_ptr<uitk::lvgl_cpp::Container> _pattern_touch;
     std::unique_ptr<uitk::lvgl_cpp::Label> _status_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _transcript_label;

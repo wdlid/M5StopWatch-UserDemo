@@ -22,12 +22,21 @@ To avoid slow filesystem scans, **DO NOT run `find /` or broad recursive searche
 
 ### Build Firmware (Local Default)
 ```bash
+# Build main watch firmware
 pio run -e m5stack-stopwatch
+
+# Build lightweight recovery firmware (1.5 MB ota_1 partition)
+pio run -e m5stack-stopwatch-recovery
 ```
 - `scripts/fetch_components.py` runs automatically as a PlatformIO `pre:` script to clone/checkout/patch external dependencies listed in `[m5_components]` in `platformio.ini`.
-- Build outputs are written to `.pio/build/m5stack-stopwatch/` (`firmware.bin`, `bootloader.bin`, `partitions.bin`, `ota_data_initial.bin`).
+- Main build outputs are written to `.pio/build/m5stack-stopwatch/` (`firmware.bin`, `bootloader.bin`, `partitions.bin`, `ota_data_initial.bin`).
+- Recovery build outputs are written to `.pio/build/m5stack-stopwatch-recovery/` (`firmware.bin`).
 
 ### Generate Merged Factory Binary (0x0 Offset)
+```bash
+python3 scripts/merge_factory_bin.py
+```
+Or manually via esptool:
 ```bash
 /root/.platformio/penv/bin/python -m esptool --chip esp32s3 merge_bin \
   -o m5stopwatch-factory-0x0.bin \
@@ -35,7 +44,8 @@ pio run -e m5stack-stopwatch
   0x0 .pio/build/m5stack-stopwatch/bootloader.bin \
   0x8000 .pio/build/m5stack-stopwatch/partitions.bin \
   0xd000 .pio/build/m5stack-stopwatch/ota_data_initial.bin \
-  0x20000 .pio/build/m5stack-stopwatch/firmware.bin
+  0x20000 .pio/build/m5stack-stopwatch/firmware.bin \
+  0x5A0000 .pio/build/m5stack-stopwatch-recovery/firmware.bin
 ```
 > **Important Hardware Constraint**: ESP32-S3 with 16 MB Flash and 8 MB Octal (OPI) PSRAM **requires `dio` flash mode** (`--flash_mode dio`), never `qio`.
 
@@ -53,9 +63,10 @@ pio run -e m5stack-stopwatch
   - **RTC**: Hardware RTC + SNTP time sync.
 - **Partition Layout (`partitions.csv`)**:
   - `nvs` (`0x9000`, 16 KB), `otadata` (`0xd000`, 8 KB), `phy_init` (`0xf000`, 4 KB)
-  - Dual OTA slots: `ota_0` (`0x20000`, ~4.9 MB) and `ota_1` (~4.9 MB)
-  - `storage`: 4 MB FAT filesystem (`hal_fs.cpp`, stores badge images and user assets)
-  - `coredump`: 64 KB
+  - `ota_0` (`0x20000`, 5.5 MB): Main stopwatch application
+  - `ota_1` (`0x5A0000`, 1.5 MB): Dedicated Recovery firmware (installer + emergency SoftAP)
+  - `storage` (`0x720000`, ~8.81 MB / 9024 KB): FAT filesystem (`hal_fs.cpp`, stores badge images, staged OTA, and user assets)
+  - `coredump` (`0xFF0000`, 64 KB)
 
 ---
 

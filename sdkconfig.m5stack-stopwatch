@@ -3854,6 +3854,8 @@ CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
 # default:
 CONFIG_LV_DRAW_BUF_ALIGN=4
 # default:
+# CONFIG_LV_DRAW_TRANSFORM_USE_MATRIX is not set
+# default:
 CONFIG_LV_DRAW_LAYER_SIMPLE_BUF_SIZE=24576
 # default:
 CONFIG_LV_DRAW_LAYER_MAX_MEMORY=0
@@ -3919,8 +3921,7 @@ CONFIG_LV_USE_DRAW_SW_ASM=0
 # CONFIG_LV_USE_DRAW_SDL is not set
 # default:
 # CONFIG_LV_USE_DRAW_VG_LITE is not set
-# default:
-# CONFIG_LV_USE_VECTOR_GRAPHIC is not set
+CONFIG_LV_USE_VECTOR_GRAPHIC=y
 # default:
 # CONFIG_LV_USE_DRAW_DMA2D is not set
 # default:
@@ -3987,6 +3988,10 @@ CONFIG_LV_OBJ_STYLE_CACHE=y
 # default:
 # CONFIG_LV_USE_OBJ_PROPERTY is not set
 # default:
+# CONFIG_LV_USE_VG_LITE_THORVG is not set
+# default:
+# CONFIG_LV_USE_GESTURE_RECOGNITION is not set
+# default:
 # CONFIG_LV_USE_EXT_DATA is not set
 # end of Others
 # end of Feature Configuration
@@ -4000,10 +4005,8 @@ CONFIG_LV_OBJ_STYLE_CACHE=y
 CONFIG_LV_ATTRIBUTE_MEM_ALIGN_SIZE=1
 # default:
 # CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM is not set
-# default:
-# CONFIG_LV_USE_FLOAT is not set
-# default:
-# CONFIG_LV_USE_MATRIX is not set
+CONFIG_LV_USE_FLOAT=y
+CONFIG_LV_USE_MATRIX=y
 # default:
 # CONFIG_LV_USE_PRIVATE_API is not set
 # end of Compiler Settings
@@ -4129,8 +4132,6 @@ CONFIG_LV_USE_FONT_PLACEHOLDER=y
 #
 # Enable static fonts
 #
-# default:
-# CONFIG_LV_DEMO_BENCHMARK_ALIGNED_FONTS is not set
 # end of Enable static fonts
 # end of Font Usage
 
@@ -4228,6 +4229,7 @@ CONFIG_LV_USE_LED=y
 CONFIG_LV_USE_LINE=y
 # default:
 CONFIG_LV_USE_LIST=y
+CONFIG_LV_USE_LOTTIE=y
 # default:
 CONFIG_LV_USE_MENU=y
 # default:
@@ -4331,6 +4333,8 @@ CONFIG_LV_USE_TJPGD=y
 # default:
 # CONFIG_LV_BIN_DECODER_RAM_LOAD is not set
 # default:
+# CONFIG_LV_USE_SVG is not set
+# default:
 # CONFIG_LV_USE_RLE is not set
 # default:
 # CONFIG_LV_USE_QRCODE is not set
@@ -4342,8 +4346,9 @@ CONFIG_LV_USE_TJPGD=y
 # CONFIG_LV_USE_TINY_TTF is not set
 # default:
 # CONFIG_LV_USE_RLOTTIE is not set
-# default:
-# CONFIG_LV_USE_THORVG is not set
+CONFIG_LV_USE_THORVG=y
+CONFIG_LV_USE_THORVG_INTERNAL=y
+# CONFIG_LV_USE_THORVG_EXTERNAL is not set
 # default:
 # CONFIG_LV_USE_NANOVG is not set
 # default:
@@ -4435,6 +4440,8 @@ CONFIG_LVGL_VERSION_PATCH=0
 # default:
 # CONFIG_LV_USE_UEFI is not set
 # default:
+# CONFIG_LV_USE_OPENGLES is not set
+# default:
 # CONFIG_LV_USE_QNX is not set
 # end of Devices
 
@@ -4449,26 +4456,7 @@ CONFIG_LV_BUILD_EXAMPLES=y
 # Demos
 #
 # default:
-CONFIG_LV_BUILD_DEMOS=y
-# default:
-CONFIG_LV_USE_DEMO_WIDGETS=y
-# default:
-# CONFIG_LV_USE_DEMO_KEYPAD_AND_ENCODER is not set
-CONFIG_LV_USE_DEMO_BENCHMARK=y
-# default:
-# CONFIG_LV_USE_DEMO_RENDER is not set
-CONFIG_LV_USE_DEMO_STRESS=y
-# default:
-# CONFIG_LV_USE_DEMO_MUSIC is not set
-# default:
-# CONFIG_LV_USE_DEMO_FLEX_LAYOUT is not set
-# default:
-# CONFIG_LV_USE_DEMO_MULTILANG is not set
-CONFIG_LV_USE_DEMO_SMARTWATCH=y
-# default:
-# CONFIG_LV_USE_DEMO_EBIKE is not set
-# default:
-# CONFIG_LV_USE_DEMO_HIGH_RES is not set
+# CONFIG_LV_BUILD_DEMOS is not set
 # end of Demos
 # end of LVGL configuration
 

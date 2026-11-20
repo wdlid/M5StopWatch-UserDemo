@@ -187,13 +187,10 @@ GeminiConfig GeminiConfig::loadFromNvs()
     cfg.binaryAudioMode = s.GetBool("bin_mode", cfg.binaryAudioMode);
     cfg.systemPrompt    = s.GetString("prompt", cfg.systemPrompt);
 
-    cfg.dohEch.dohEnabled         = s.GetBool("doh_en", cfg.dohEch.dohEnabled);
-    cfg.dohEch.dohUrl1            = s.GetString("doh_url1", cfg.dohEch.dohUrl1);
-    cfg.dohEch.dohUrl2            = s.GetString("doh_url2", cfg.dohEch.dohUrl2);
-    cfg.dohEch.echEnabled         = s.GetBool("ech_en", cfg.dohEch.echEnabled);
-    cfg.dohEch.echConfigDomain    = s.GetString("ech_dom", cfg.dohEch.echConfigDomain);
-    cfg.dohEch.staticEchConfigB64 = s.GetString("ech_b64", cfg.dohEch.staticEchConfigB64);
-    cfg.dohEch.connectIp          = s.GetString("conn_ip", cfg.dohEch.connectIp);
+    cfg.dohEch.dohEnabled = s.GetBool("doh_en", cfg.dohEch.dohEnabled);
+    cfg.dohEch.dohUrl1    = s.GetString("doh_url1", cfg.dohEch.dohUrl1);
+    cfg.dohEch.dohUrl2    = s.GetString("doh_url2", cfg.dohEch.dohUrl2);
+    cfg.dohEch.connectIp  = s.GetString("conn_ip", cfg.dohEch.connectIp);
     return cfg;
 }
 
@@ -212,9 +209,6 @@ void GeminiConfig::saveToNvs() const
     s.SetBool("doh_en", dohEch.dohEnabled);
     s.SetString("doh_url1", dohEch.dohUrl1);
     s.SetString("doh_url2", dohEch.dohUrl2);
-    s.SetBool("ech_en", dohEch.echEnabled);
-    s.SetString("ech_dom", dohEch.echConfigDomain);
-    s.SetString("ech_b64", dohEch.staticEchConfigB64);
     s.SetString("conn_ip", dohEch.connectIp);
 }
 
@@ -726,7 +720,7 @@ void GeminiLiveClient::taskLoop()
         if (!_ws.isConnected()) {
             _setup_complete = false;
             _state          = SessionState::Connecting;
-            setStatusText("Connecting via ECH/DoH...");
+            setStatusText("Connecting...");
 
             std::string effective_url = _config.wsUrl;
             const bool is_google = effective_url.find("generativelanguage.googleapis.com") != std::string::npos;

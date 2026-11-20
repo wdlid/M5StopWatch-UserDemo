@@ -417,37 +417,22 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
         return ESP_FAIL;
     }
 
-    const esp_partition_t* update_partition = esp_ota_get_next_update_partition(nullptr);
-    if (!update_partition) {
-        ESP_LOGE(_tag, "Failed to find next OTA update partition");
-        mgr.setStatus(State::Failed, 0, 0, req->content_len, "No update partition found");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition available");
+    constexpr const char* UPDATE_PATH = "/spiflash/update.bin";
+    FILE* f = fopen(UPDATE_PATH, "wb");
+    if (!f) {
+        ESP_LOGE(_tag, "Failed to open %s for writing", UPDATE_PATH);
+        mgr.setStatus(State::Failed, 0, 0, req->content_len, "Storage write failed");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Storage unavailable");
         return ESP_FAIL;
     }
 
-    if (static_cast<size_t>(req->content_len) > update_partition->size) {
-        ESP_LOGE(_tag, "Firmware size (%zu) exceeds partition size (%zu)",
-                 static_cast<size_t>(req->content_len), update_partition->size);
-        mgr.setStatus(State::Failed, 0, 0, req->content_len, "Firmware size exceeds partition");
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Firmware binary too large for partition");
-        return ESP_FAIL;
-    }
-
-    esp_ota_handle_t ota_handle = 0;
-    esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(_tag, "esp_ota_begin failed: %s", esp_err_to_name(err));
-        mgr.setStatus(State::Failed, 0, 0, req->content_len, "OTA begin failed");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to initialize OTA write");
-        return ESP_FAIL;
-    }
-
-    mgr.setStatus(State::Flashing, 0, 0, req->content_len, "Writing firmware to flash...");
+    mgr.setStatus(State::Flashing, 0, 0, req->content_len, "Receiving firmware...");
 
     auto buffer = std::make_unique<char[]>(_chunk_buffer_size);
     if (!buffer) {
         ESP_LOGE(_tag, "Failed to allocate OTA buffer");
-        esp_ota_abort(ota_handle);
+        fclose(f);
+        remove(UPDATE_PATH);
         mgr.setStatus(State::Failed, 0, 0, req->content_len, "Out of memory");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
         return ESP_FAIL;
@@ -468,7 +453,8 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
                 continue;
             }
             ESP_LOGE(_tag, "Receive error: %d", received);
-            esp_ota_abort(ota_handle);
+            fclose(f);
+            remove(UPDATE_PATH);
             mgr.setStatus(State::Failed, 0, received_total, req->content_len, "Network timeout / read error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Connection broken during upload");
             return ESP_FAIL;
@@ -479,7 +465,8 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
             if (received > 0 && static_cast<uint8_t>(buffer[0]) != ESP_IMAGE_HEADER_MAGIC) {
                 ESP_LOGE(_tag, "Invalid binary magic: 0x%02X (expected 0x%02X)",
                          static_cast<uint8_t>(buffer[0]), ESP_IMAGE_HEADER_MAGIC);
-                esp_ota_abort(ota_handle);
+                fclose(f);
+                remove(UPDATE_PATH);
                 mgr.setStatus(State::Failed, 0, 0, req->content_len, "Invalid firmware file (not an ESP32 binary)");
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid firmware magic header");
                 return ESP_FAIL;
@@ -487,12 +474,13 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
             magic_checked = true;
         }
 
-        err = esp_ota_write(ota_handle, buffer.get(), received);
-        if (err != ESP_OK) {
-            ESP_LOGE(_tag, "esp_ota_write failed: %s", esp_err_to_name(err));
-            esp_ota_abort(ota_handle);
-            mgr.setStatus(State::Failed, 0, received_total, req->content_len, "Flash write error");
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash write failed");
+        size_t written = fwrite(buffer.get(), 1, received, f);
+        if (written != static_cast<size_t>(received)) {
+            ESP_LOGE(_tag, "Storage write failed");
+            fclose(f);
+            remove(UPDATE_PATH);
+            mgr.setStatus(State::Failed, 0, received_total, req->content_len, "Storage write error");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Storage write failed");
             return ESP_FAIL;
         }
 
@@ -502,7 +490,7 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
         int percent = static_cast<int>((received_total * 100) / req->content_len);
         if (percent != last_percent || remaining == 0) {
             last_percent = percent;
-            mgr.setStatus(State::Flashing, percent, received_total, req->content_len, "Flashing...");
+            mgr.setStatus(State::Flashing, percent, received_total, req->content_len, "Uploading...");
         }
 
         // Yield briefly every 32KB to let the network stack and UI tasks run smoothly
@@ -512,27 +500,32 @@ esp_err_t OtaManager::handle_ota_upload(httpd_req_t* req)
         }
     }
 
-    err = esp_ota_end(ota_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(_tag, "esp_ota_end failed: %s", esp_err_to_name(err));
-        mgr.setStatus(State::Failed, 0, received_total, req->content_len, "OTA validation failed");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Firmware verification failed");
+    fclose(f);
+
+    const esp_partition_t* ota_1 = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    if (!ota_1) {
+        ESP_LOGE(_tag, "Recovery partition (ota_1) not found");
+        remove(UPDATE_PATH);
+        mgr.setStatus(State::Failed, 0, received_total, req->content_len, "Recovery partition missing");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recovery partition missing");
         return ESP_FAIL;
     }
 
-    err = esp_ota_set_boot_partition(update_partition);
+    esp_err_t err = esp_ota_set_boot_partition(ota_1);
     if (err != ESP_OK) {
         ESP_LOGE(_tag, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        remove(UPDATE_PATH);
         mgr.setStatus(State::Failed, 0, received_total, req->content_len, "Set boot partition failed");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set boot partition");
         return ESP_FAIL;
     }
 
-    ESP_LOGI(_tag, "OTA successfully flashed to partition %s! Scheduling reboot...", update_partition->label);
-    mgr.setStatus(State::Success, 100, received_total, req->content_len, "Update successful! Rebooting...");
+    ESP_LOGI(_tag, "Firmware staged in storage. Boot partition set to ota_1 (Recovery). Scheduling reboot...");
+    mgr.setStatus(State::Success, 100, received_total, req->content_len, "Upload complete! Rebooting to flash...");
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, "{\"status\":\"ok\",\"message\":\"Firmware flashed successfully! Device is restarting...\"}");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\",\"message\":\"Firmware uploaded! Device is restarting to install...\"}");
 
     schedule_delayed_restart(1500);
     return ESP_OK;

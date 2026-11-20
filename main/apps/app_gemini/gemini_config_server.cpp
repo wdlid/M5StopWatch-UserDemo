@@ -218,12 +218,12 @@ const char GEMINI_CONFIG_HTML[] = R"rawliteral(<!DOCTYPE html>
       M5StopWatch · Live Audio
     </div>
     <h1>Gemini 3.8 实时语音网关</h1>
-    <p>Anthropic 质感配色与排版 · 支持 Cloudflare Worker 二进制穿透与 ECH/DoH 防阻断</p>
+    <p>Anthropic 质感配色与排版 · 支持 Cloudflare Worker 二进制穿透与 DoH 加速</p>
   </div>
 
   <div class="card">
     <div class="card-header">
-      <div class="card-title">1. 服务网关与语音模型</div>
+      <div class="card-title">1. 网关与模型服务连接</div>
       <div class="card-tag">Gateway &amp; Model</div>
     </div>
 
@@ -289,25 +289,14 @@ const char GEMINI_CONFIG_HTML[] = R"rawliteral(<!DOCTYPE html>
 
   <div class="card">
     <div class="card-header">
-      <div class="card-title">2. 网络穿透与防阻断加速</div>
-      <div class="card-tag">ECH &amp; DoH Tunnel</div>
-    </div>
-
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <div class="toggle-title">启用 TLS 1.3 ECH / 外层 SNI 混淆</div>
-        <div class="toggle-desc">使用 cloudflare-ech.com 隐藏真实的 *.workers.dev 域名，避免明文 SNI 阻断</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" id="ech_en" checked>
-        <span class="slider"></span>
-      </label>
+      <div class="card-title">2. 网络穿透与 DNS 加速</div>
+      <div class="card-tag">DoH Tunnel</div>
     </div>
 
     <div class="toggle-row">
       <div class="toggle-info">
         <div class="toggle-title">启用 RFC 8484 DNS-over-HTTPS (DoH)</div>
-        <div class="toggle-desc">安全加密解析 IP 与 ECHConfigList，防范 DNS 污染与劫持</div>
+        <div class="toggle-desc">安全加密解析 IP，防范本地 DNS 污染与劫持</div>
       </div>
       <label class="switch">
         <input type="checkbox" id="doh_en" checked>
@@ -317,12 +306,7 @@ const char GEMINI_CONFIG_HTML[] = R"rawliteral(<!DOCTYPE html>
 
     <div class="form-group" style="margin-top:12px;">
       <label>静态优选 Anycast IP (选填)</label>
-      <input type="text" id="conn_ip" class="mono" placeholder="例如 172.64.229.205 (留空则通过 DoH 自动优选)">
-    </div>
-
-    <div class="form-group">
-      <label>ECH 外层公网域名 (Public Name)</label>
-      <input type="text" id="ech_dom" class="mono" placeholder="cloudflare-ech.com">
+      <input type="text" id="conn_ip" class="mono" placeholder="例如 172.64.229.205 (留空则通过 DNS/DoH 自动解析)">
     </div>
 
     <div class="form-group">
@@ -333,11 +317,6 @@ const char GEMINI_CONFIG_HTML[] = R"rawliteral(<!DOCTYPE html>
     <div class="form-group">
       <label>备用 DoH 解析节点</label>
       <input type="text" id="doh_url2" class="mono" placeholder="https://edge.1molchuan.top/plus">
-    </div>
-
-    <div class="form-group">
-      <label>静态 ECHConfigList (Base64，选填)</label>
-      <input type="text" id="ech_b64" class="mono" placeholder="留空则通过 DoH HTTPS(Type 65) 动态拉取">
     </div>
   </div>
 
@@ -358,13 +337,10 @@ async function loadConfig() {
     document.getElementById('thinking').value = d.thinking || 'LOW';
     document.getElementById('voice').value = d.voice || 'Leda';
     document.getElementById('prompt').value = d.systemPrompt || '';
-    document.getElementById('ech_en').checked = d.echEnabled !== false;
     document.getElementById('doh_en').checked = d.dohEnabled !== false;
     document.getElementById('conn_ip').value = d.connectIp || '';
-    document.getElementById('ech_dom').value = d.echConfigDomain || 'cloudflare-ech.com';
     document.getElementById('doh_url1').value = d.dohUrl1 || '';
     document.getElementById('doh_url2').value = d.dohUrl2 || '';
-    document.getElementById('ech_b64').value = d.staticEchConfigB64 || '';
   } catch (e) {
     console.error(e);
   }
@@ -380,13 +356,10 @@ async function saveConfig() {
     thinking: document.getElementById('thinking').value,
     voice: document.getElementById('voice').value,
     systemPrompt: document.getElementById('prompt').value.trim(),
-    echEnabled: document.getElementById('ech_en').checked,
     dohEnabled: document.getElementById('doh_en').checked,
     connectIp: document.getElementById('conn_ip').value.trim(),
-    echConfigDomain: document.getElementById('ech_dom').value.trim(),
     dohUrl1: document.getElementById('doh_url1').value.trim(),
-    dohUrl2: document.getElementById('doh_url2').value.trim(),
-    staticEchConfigB64: document.getElementById('ech_b64').value.trim()
+    dohUrl2: document.getElementById('doh_url2').value.trim()
   };
   const t = document.getElementById('toast');
   try {
@@ -578,13 +551,10 @@ esp_err_t GeminiConfigServer::handleGetConfig(httpd_req_t* req)
     doc["thinking"]           = cfg.thinking;
     doc["binaryAudioMode"]    = cfg.binaryAudioMode;
     doc["systemPrompt"]       = cfg.systemPrompt;
-    doc["dohEnabled"]         = cfg.dohEch.dohEnabled;
-    doc["dohUrl1"]            = cfg.dohEch.dohUrl1;
-    doc["dohUrl2"]            = cfg.dohEch.dohUrl2;
-    doc["echEnabled"]         = cfg.dohEch.echEnabled;
-    doc["echConfigDomain"]    = cfg.dohEch.echConfigDomain;
-    doc["staticEchConfigB64"] = cfg.dohEch.staticEchConfigB64;
-    doc["connectIp"]          = cfg.dohEch.connectIp;
+    doc["dohEnabled"]      = cfg.dohEch.dohEnabled;
+    doc["dohUrl1"]         = cfg.dohEch.dohUrl1;
+    doc["dohUrl2"]         = cfg.dohEch.dohUrl2;
+    doc["connectIp"]       = cfg.dohEch.connectIp;
 
     std::string out;
     serializeJson(doc, out);
@@ -628,10 +598,6 @@ esp_err_t GeminiConfigServer::handleSaveConfig(httpd_req_t* req)
     if (doc["dohEnabled"].is<bool>()) cfg.dohEch.dohEnabled = doc["dohEnabled"].as<bool>();
     if (doc["dohUrl1"].is<const char*>()) cfg.dohEch.dohUrl1 = doc["dohUrl1"].as<std::string>();
     if (doc["dohUrl2"].is<const char*>()) cfg.dohEch.dohUrl2 = doc["dohUrl2"].as<std::string>();
-    if (doc["echEnabled"].is<bool>()) cfg.dohEch.echEnabled = doc["echEnabled"].as<bool>();
-    if (doc["echConfigDomain"].is<const char*>()) cfg.dohEch.echConfigDomain = doc["echConfigDomain"].as<std::string>();
-    if (doc["staticEchConfigB64"].is<const char*>())
-        cfg.dohEch.staticEchConfigB64 = doc["staticEchConfigB64"].as<std::string>();
     if (doc["connectIp"].is<const char*>()) cfg.dohEch.connectIp = doc["connectIp"].as<std::string>();
 
     cfg.saveToNvs();
