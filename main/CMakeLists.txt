@@ -6,6 +6,7 @@ if(DEFINED ENV{BUILD_RECOVERY} OR BUILD_RECOVERY)
         INCLUDE_DIRS 
             "."
         REQUIRES
+            app_update
             esp_partition
             esp_wifi
             esp_http_server
@@ -17,6 +18,8 @@ if(DEFINED ENV{BUILD_RECOVERY} OR BUILD_RECOVERY)
             M5PM1
             M5IOE1
             driver
+            esp_system
+            esp_hw_support
     )
 else()
     file(GLOB_RECURSE MY_SRCS
