@@ -226,6 +226,12 @@ public:
         // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with continuous phase across chunks
         const float step = static_cast<float>(std::max(8000, srcRate)) / static_cast<float>(sample_rate);
 
+        // Apply clean linear speech gain (+3.2 dB) with transparent soft-knee peak limiting above +/-29500
+        // to preserve original timbre and audio quality while preventing digital clipping on rare peaks
+        constexpr float speech_gain     = 1.45f;
+        constexpr float soft_knee_start = 29500.0f;
+        constexpr float soft_knee_span  = 3267.0f;
+
         float sum_sq            = 0.0f;
         std::size_t out_samples = 0;
         bool trigger_task       = false;
@@ -261,13 +267,21 @@ public:
                     s1                     = static_cast<float>(samples[idx1]);
                 }
 
-                float val = s0 * (1.0f - frac) + s1 * frac;
+                float val = (s0 * (1.0f - frac) + s1 * frac) * speech_gain;
 
                 // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
                 if (starting_fresh && out_samples < 64) {
                     const float fade =
                         0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(out_samples) / 64.0f));
                     val *= fade;
+                }
+
+                if (val > soft_knee_start) {
+                    const float excess = (val - soft_knee_start) / soft_knee_span;
+                    val                = soft_knee_start + soft_knee_span * (excess / (1.0f + excess));
+                } else if (val < -soft_knee_start) {
+                    const float excess = (-val - soft_knee_start) / soft_knee_span;
+                    val                = -soft_knee_start - soft_knee_span * (excess / (1.0f + excess));
                 }
 
                 int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));

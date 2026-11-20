@@ -17,7 +17,6 @@ using namespace uitk::lvgl_cpp;
 void mist_draw_event_cb(lv_event_t* e);
 
 constexpr int _panel_size = 466;
-constexpr int _canvas_size = 220;
 constexpr int _num_sectors = 24;
 constexpr int _deg_per_sector = 360 / _num_sectors;
 
@@ -45,60 +44,6 @@ int32_t get_sin(int32_t deg, int32_t amplitude)
     return (result + LV_TRIGO_SIN_MAX / 2) >> LV_TRIGO_SHIFT;
 }
 
-lv_color_t get_sector_color(int32_t deg, int32_t rot, gemini::SessionState state,
-                             bool is_talking, bool web_active, float pitch)
-{
-    if (web_active) {
-        int32_t a = norm_deg(deg + rot);
-        uint8_t m = static_cast<uint8_t>((get_cos(a * 2, 127) + 128));
-        return lv_color_mix(lv_color_hex(0xA855F7), lv_color_hex(0x7C3AED), m);
-    }
-
-    if (state == gemini::SessionState::Error) {
-        return lv_color_hex(0xDC2626);
-    }
-
-    if (is_talking || state == gemini::SessionState::Listening) {
-        // High-energy electric cyan & turquoise reacting to voice pitch
-        int32_t a = norm_deg(deg * 2 - rot);
-        uint8_t m = static_cast<uint8_t>((get_sin(a, 100) + 128));
-        uint8_t pitch_mix = static_cast<uint8_t>(std::clamp(pitch * 200.0f, 0.0f, 255.0f));
-        lv_color_t base = lv_color_mix(lv_color_hex(0x22D3EE), lv_color_hex(0x06B6D4), m);
-        return lv_color_mix(lv_color_hex(0x67E8F9), base, pitch_mix);
-    }
-
-    if (state == gemini::SessionState::Thinking) {
-        // Mystic violet & purple nebula swirl
-        int32_t a = norm_deg(deg * 3 + rot * 2);
-        uint8_t m = static_cast<uint8_t>((get_cos(a, 120) + 128));
-        return lv_color_mix(lv_color_hex(0x9333EA), lv_color_hex(0x6366F1), m);
-    }
-
-    if (state == gemini::SessionState::Speaking) {
-        // Iconic Google 4-Color rotating gradient: Blue -> Violet -> Coral -> Amber
-        int32_t a = norm_deg(deg + rot);
-        int quadrant = a / 90;
-        int rem = a % 90;
-        uint8_t frac = static_cast<uint8_t>((rem * 255) / 90);
-
-        switch (quadrant) {
-            case 0:
-                return lv_color_mix(lv_color_hex(0x8B5CF6), lv_color_hex(0x3B82F6), frac);
-            case 1:
-                return lv_color_mix(lv_color_hex(0xEF4444), lv_color_hex(0x8B5CF6), frac);
-            case 2:
-                return lv_color_mix(lv_color_hex(0xF59E0B), lv_color_hex(0xEF4444), frac);
-            default:
-                return lv_color_mix(lv_color_hex(0x3B82F6), lv_color_hex(0xF59E0B), frac);
-        }
-    }
-
-    // Default / Ready / Idle: Calm cosmic azure
-    int32_t a = norm_deg(deg + rot);
-    uint8_t m = static_cast<uint8_t>((get_cos(a, 100) + 128));
-    return lv_color_mix(lv_color_hex(0x0EA5E9), lv_color_hex(0x0284C7), m);
-}
-
 }  // namespace
 
 namespace view {
@@ -116,15 +61,14 @@ void GeminiView::init(lv_obj_t* parent)
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-    // Dynamic living visual canvas in screen center (220x220)
+    // Dynamic living mist canvas covering the entire viewport
     _mist_canvas = std::make_unique<Container>(_panel->get());
     _mist_canvas->align(LV_ALIGN_CENTER, 0, 0);
-    _mist_canvas->setSize(_canvas_size, _canvas_size);
+    _mist_canvas->setSize(_panel_size, _panel_size);
     _mist_canvas->setRadius(0);
     _mist_canvas->setBorderWidth(0);
     _mist_canvas->setPaddingAll(0);
-    _mist_canvas->setBgColor(lv_color_hex(0x05070D));
-    _mist_canvas->setBgOpa(LV_OPA_COVER);
+    _mist_canvas->setBgOpa(LV_OPA_TRANSP);
     _mist_canvas->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _mist_canvas->removeFlag(LV_OBJ_FLAG_CLICKABLE);
 
@@ -345,12 +289,12 @@ void mist_draw_event_cb(lv_event_t* e)
 
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_REFR_EXT_DRAW_SIZE) {
-        lv_event_set_ext_draw_size(e, 0);
+        lv_event_set_ext_draw_size(e, 180);
         return;
     }
 
     if (code == LV_EVENT_COVER_CHECK) {
-        lv_event_set_cover_res(e, LV_COVER_RES_COVER);
+        lv_event_set_cover_res(e, LV_COVER_RES_NOT_COVER);
         return;
     }
 
@@ -386,134 +330,168 @@ void mist_draw_event_cb(lv_event_t* e)
     const bool web_active  = view->isWebConfigActive();
     const auto state       = view->state();
 
-    uint32_t col_halo = 0x071526;
-    uint32_t col_core = 0x7DD3FC;
+    // Determine color theme based on conversational state
+    uint32_t col_outer = 0x0C2340;
+    uint32_t col_mid_1 = 0x0284C7;
+    uint32_t col_mid_2 = 0x0EA5E9;
+    uint32_t col_inner = 0x38BDF8;
+    uint32_t col_core  = 0xBAE6FD;
 
     if (web_active) {
-        col_halo = 0x1B0E2E;
-        col_core = 0xE9D5FF;
-    } else if (state == gemini::SessionState::Error) {
-        col_halo = 0x260C0C;
-        col_core = 0xFCA5A5;
+        col_outer = 0x4C1D95;
+        col_mid_1 = 0x7C3AED;
+        col_mid_2 = 0xA855F7;
+        col_inner = 0xC084FC;
+        col_core  = 0xEDE9FE;
     } else if (is_talking || state == gemini::SessionState::Listening) {
-        col_halo = 0x061E28;
-        col_core = 0xBAE6FD;
-    } else if (state == gemini::SessionState::Thinking) {
-        col_halo = 0x160B29;
-        col_core = 0xE0E7FF;
+        // High-energy electric cyan & radiant white mist for voice input
+        col_outer = 0x0E7490;
+        col_mid_1 = 0x06B6D4;
+        col_mid_2 = 0x22D3EE;
+        col_inner = 0x67E8F9;
+        col_core  = 0xFFFFFF;
     } else if (state == gemini::SessionState::Speaking) {
-        col_halo = 0x0C1938;
-        col_core = 0xFEF08A;
+        // Luminous aurora shifting with AI voice pitch and harmonic energy
+        uint8_t pitch_mix = static_cast<uint8_t>(std::clamp(pitch * 255.0f, 0.0f, 255.0f));
+        col_outer = 0x1E3A8A;
+        col_mid_1 = 0x3B82F6;
+        col_mid_2 = 0xF59E0B;
+        col_inner = lv_color_to_int(lv_color_mix(lv_color_hex(0x67E8F9), lv_color_hex(0xFCD34D), pitch_mix));
+        col_core  = 0xFFFFF5;
+    } else if (state == gemini::SessionState::Thinking) {
+        // Mystic deep violet & purple nebula swirl
+        col_outer = 0x3B0764;
+        col_mid_1 = 0x6366F1;
+        col_mid_2 = 0x9333EA;
+        col_inner = 0xA855F7;
+        col_core  = 0xF5F3FF;
+    } else if (state == gemini::SessionState::Error) {
+        // Soft rose / coral mist
+        col_outer = 0x7F1D1D;
+        col_mid_1 = 0xDC2626;
+        col_mid_2 = 0xEF4444;
+        col_inner = 0xF87171;
+        col_core  = 0xFEE2E2;
     }
 
-    int breath = get_sin(static_cast<int32_t>(tick * 4), 5);
-    int base_rot_speed = 2;
+    // Organic idle breath and harmonic rotation speed
+    int breath = get_sin(static_cast<int32_t>(tick * 3), 7) + 7;
+    int base_rot_speed = 2 + static_cast<int>(pitch * 3.5f);
     if (state == gemini::SessionState::Thinking) {
         base_rot_speed = 6;
-    } else if (state == gemini::SessionState::Speaking) {
-        base_rot_speed = 3 + static_cast<int>(pitch * 3.0f);
     }
     int32_t rot = norm_deg(static_cast<int32_t>(tick * base_rot_speed));
 
-    int base_r = 58 + static_cast<int>(level * 28.0f + bass * 14.0f) + breath;
-    base_r = std::clamp(base_r, 48, 88);
+    int base_r = 82 + static_cast<int>(level * 52.0f + bass * 26.0f) + breath;
 
-    std::array<int, _num_sectors> r_halo;
-    std::array<int, _num_sectors> r_orb;
-    std::array<int, _num_sectors> r_core;
+    // Radii buffers for the multi-layered mist cloud
+    std::array<int, _num_sectors> r_mid;
+    std::array<int, _num_sectors> r_out;
+    std::array<int, _num_sectors> r_in;
 
     for (int i = 0; i < _num_sectors; ++i) {
         int32_t deg = i * _deg_per_sector;
 
-        int32_t h1 = get_cos(2 * deg + rot, 5 + static_cast<int>(bass * 14.0f));
-        int32_t h2 = get_sin(3 * deg - rot * 2, 4 + static_cast<int>(low_m * 10.0f));
-        int32_t h3 = get_cos(4 * deg + rot * 3, 3 + static_cast<int>(high_m * 8.0f + pitch * 6.0f));
-        int32_t h4 = get_sin(6 * deg - rot, 2 + static_cast<int>(treble * 6.0f));
+        // Wave 1: 2 lobes driven by bass
+        int32_t h1 = get_cos(2 * deg + rot, 8 + static_cast<int>(bass * 26.0f));
+        // Wave 2: 3 lobes driven by voice fundamental / low-mid
+        int32_t h2 = get_sin(3 * deg - rot * 2, 6 + static_cast<int>(low_m * 20.0f));
+        // Wave 3: 5 lobes driven by speech formants / high-mid and pitch
+        int32_t h3 = get_cos(5 * deg + rot * 3, 4 + static_cast<int>(high_m * 14.0f + pitch * 10.0f));
+        // Wave 4: 7 lobes driven by treble fine mist shimmer
+        int32_t h4 = get_sin(7 * deg - rot, 2 + static_cast<int>(treble * 10.0f));
 
         int rad = base_r + (h1 + h2 + h3 + h4);
-        rad = std::clamp(rad, 40, 92);
-
-        r_orb[i]  = rad;
-        r_halo[i] = std::min(rad + 12, 106);
-        r_core[i] = std::max(static_cast<int>(rad * 0.52f), 24) + static_cast<int>(level * 8.0f);
+        r_mid[i] = std::max(rad, 40);
+        r_out[i] = static_cast<int>(r_mid[i] * 1.34f + 16);
+        r_in[i]  = static_cast<int>(r_mid[i] * 0.70f);
     }
 
     lv_draw_triangle_dsc_t draw_dsc;
     lv_draw_triangle_dsc_init(&draw_dsc);
     draw_dsc.opa = LV_OPA_COVER;
 
-    // Layer 1: Ambient deep cosmic halo
-    draw_dsc.color = lv_color_hex(col_halo);
+    // -------------------------------------------------------------
+    // Layer 1: Outer diffuse mist halo (pre-blended with cosmic background for 60 FPS opaque speed)
+    // -------------------------------------------------------------
+    draw_dsc.color = lv_color_mix(lv_color_hex(col_outer), lv_color_hex(0x05070D), 85);
+
     for (int i = 0; i < _num_sectors; ++i) {
         int next_i = (i + 1) % _num_sectors;
         int32_t deg1 = i * _deg_per_sector;
         int32_t deg2 = next_i * _deg_per_sector;
 
         draw_dsc.p[0] = center;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_halo[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_halo[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_halo[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_halo[next_i]);
+        draw_dsc.p[1].x = center.x + get_cos(deg1, r_out[i]);
+        draw_dsc.p[1].y = center.y + get_sin(deg1, r_out[i]);
+        draw_dsc.p[2].x = center.x + get_cos(deg2, r_out[next_i]);
+        draw_dsc.p[2].y = center.y + get_sin(deg2, r_out[next_i]);
         lv_draw_triangle(layer, &draw_dsc);
     }
 
-    // Layer 2: Main energetic reactive orb
+    // -------------------------------------------------------------
+    // Layer 2: Middle flowing mist nebula (fluid organic cloud)
+    // -------------------------------------------------------------
     for (int i = 0; i < _num_sectors; ++i) {
         int next_i = (i + 1) % _num_sectors;
         int32_t deg1 = i * _deg_per_sector;
         int32_t deg2 = next_i * _deg_per_sector;
 
-        draw_dsc.color = get_sector_color(deg1, rot, state, is_talking, web_active, pitch);
+        uint8_t mix = static_cast<uint8_t>((get_cos(deg1 * 2 + rot, 127) + 128));
+        draw_dsc.color = lv_color_mix(lv_color_hex(col_mid_2), lv_color_hex(col_mid_1), mix);
+
         draw_dsc.p[0] = center;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_orb[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_orb[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_orb[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_orb[next_i]);
+        draw_dsc.p[1].x = center.x + get_cos(deg1, r_mid[i]);
+        draw_dsc.p[1].y = center.y + get_sin(deg1, r_mid[i]);
+        draw_dsc.p[2].x = center.x + get_cos(deg2, r_mid[next_i]);
+        draw_dsc.p[2].y = center.y + get_sin(deg2, r_mid[next_i]);
         lv_draw_triangle(layer, &draw_dsc);
     }
 
-    // Layer 3: Luminous inner core
+    // -------------------------------------------------------------
+    // Layer 3: Inner swirling mist aura (luminous depth layer)
+    // -------------------------------------------------------------
+    draw_dsc.color = lv_color_hex(col_inner);
+    const int32_t angle_offset = 25;
+
+    for (int i = 0; i < _num_sectors; ++i) {
+        int next_i = (i + 1) % _num_sectors;
+        int32_t deg1 = i * _deg_per_sector + angle_offset;
+        int32_t deg2 = next_i * _deg_per_sector + angle_offset;
+
+        draw_dsc.p[0] = center;
+        draw_dsc.p[1].x = center.x + get_cos(deg1, r_in[i]);
+        draw_dsc.p[1].y = center.y + get_sin(deg1, r_in[i]);
+        draw_dsc.p[2].x = center.x + get_cos(deg2, r_in[next_i]);
+        draw_dsc.p[2].y = center.y + get_sin(deg2, r_in[next_i]);
+        lv_draw_triangle(layer, &draw_dsc);
+    }
+
+    // -------------------------------------------------------------
+    // Layer 4: Center radiant core (pulsing heart of the orb)
+    // -------------------------------------------------------------
+    int core_r = 38 + static_cast<int>(level * 16.0f + bass * 12.0f);
     draw_dsc.color = lv_color_hex(col_core);
+
     for (int i = 0; i < _num_sectors; ++i) {
         int next_i = (i + 1) % _num_sectors;
         int32_t deg1 = i * _deg_per_sector;
         int32_t deg2 = next_i * _deg_per_sector;
 
         draw_dsc.p[0] = center;
-        draw_dsc.p[1].x = center.x + get_cos(deg1, r_core[i]);
-        draw_dsc.p[1].y = center.y + get_sin(deg1, r_core[i]);
-        draw_dsc.p[2].x = center.x + get_cos(deg2, r_core[next_i]);
-        draw_dsc.p[2].y = center.y + get_sin(deg2, r_core[next_i]);
+        draw_dsc.p[1].x = center.x + get_cos(deg1, core_r);
+        draw_dsc.p[1].y = center.y + get_sin(deg1, core_r);
+        draw_dsc.p[2].x = center.x + get_cos(deg2, core_r);
+        draw_dsc.p[2].y = center.y + get_sin(deg2, core_r);
         lv_draw_triangle(layer, &draw_dsc);
     }
 
-    // Layer 4: Orbiting satellite sparks
-    int r_sat = std::clamp(base_r + 14, 55, 102);
-    draw_dsc.color = lv_color_hex(0xFFFFFF);
-    for (int s = 0; s < 4; ++s) {
-        int32_t s_deg = norm_deg(rot + s * 90);
-        float sx = center.x + get_cos(s_deg, r_sat);
-        float sy = center.y + get_sin(s_deg, r_sat);
-        const float spark_size = 3.0f;
-
-        draw_dsc.p[0].x = sx;
-        draw_dsc.p[0].y = sy - spark_size;
-        draw_dsc.p[1].x = sx - spark_size;
-        draw_dsc.p[1].y = sy;
-        draw_dsc.p[2].x = sx + spark_size;
-        draw_dsc.p[2].y = sy;
-        lv_draw_triangle(layer, &draw_dsc);
-
-        draw_dsc.p[0].x = sx;
-        draw_dsc.p[0].y = sy + spark_size;
-        lv_draw_triangle(layer, &draw_dsc);
-    }
-
-    // Layer 5: Center iconic Gemini 4-pointed sparkle
-    int spark_len = 14 + static_cast<int>(level * 16.0f) + (breath >> 1);
-    spark_len = std::clamp(spark_len, 12, 34);
+    // -------------------------------------------------------------
+    // Layer 5: Center Gemini four-pointed sparkle
+    // -------------------------------------------------------------
+    int spark_len   = 16 + static_cast<int>(level * 12.0f + breath * 0.4f);
     const float spark_thick = 4.0f;
-    draw_dsc.color = lv_color_hex(0xFFFFFF);
+    draw_dsc.color  = lv_color_hex(0xFFFFFF);
 
     // Top spike
     draw_dsc.p[0].x = center.x;

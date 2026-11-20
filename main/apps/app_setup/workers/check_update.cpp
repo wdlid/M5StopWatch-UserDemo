@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
 
 using namespace uitk;
@@ -100,7 +101,14 @@ struct Version {
 struct HttpRespBuf {
     std::string body;
     size_t max_size                = 64 * 1024;
+    FILE* file                     = nullptr;
+    size_t expected_size           = 0;
+    size_t received_bytes          = 0;
+    size_t total_bytes             = 0;
+    int last_progress              = -1;
+    bool write_error               = false;
     std::atomic<bool>* abort_flag = nullptr;
+    std::function<void(size_t received, size_t total, int progress)> on_progress;
 };
 
 esp_err_t http_event_cb(esp_http_client_event_t* evt)
@@ -110,7 +118,31 @@ esp_err_t http_event_cb(esp_http_client_event_t* evt)
         return ESP_FAIL;
     }
     if (evt->event_id == HTTP_EVENT_ON_DATA && b != nullptr && evt->data != nullptr && evt->data_len > 0) {
-        if (b->body.size() + evt->data_len <= b->max_size) {
+        if (b->file != nullptr) {
+            int status = esp_http_client_get_status_code(evt->client);
+            if (status >= 200 && status < 300) {
+                if (b->total_bytes == 0) {
+                    int64_t cl = esp_http_client_get_content_length(evt->client);
+                    b->total_bytes = (cl > 0) ? static_cast<size_t>(cl) : b->expected_size;
+                }
+                size_t written = fwrite(evt->data, 1, evt->data_len, b->file);
+                if (written != static_cast<size_t>(evt->data_len)) {
+                    b->write_error = true;
+                    return ESP_FAIL;
+                }
+                b->received_bytes += written;
+                int progress = (b->total_bytes > 0)
+                                   ? static_cast<int>((static_cast<uint64_t>(b->received_bytes) * 100) / b->total_bytes)
+                                   : 0;
+                if (progress > 100) progress = 100;
+                if (progress != b->last_progress || (b->total_bytes > 0 && b->received_bytes >= b->total_bytes)) {
+                    b->last_progress = progress;
+                    if (b->on_progress) {
+                        b->on_progress(b->received_bytes, b->total_bytes, progress);
+                    }
+                }
+            }
+        } else if (b->body.size() + evt->data_len <= b->max_size) {
             b->body.append(static_cast<const char*>(evt->data), evt->data_len);
         }
     }
@@ -590,16 +622,6 @@ void CheckUpdateWorker::_startOtaTask()
 
             mclog::tagInfo(_tag, "Starting HTTPS OTA download to storage: {}", url);
 
-            esp_http_client_config_t http_config = {};
-            http_config.url                      = url.c_str();
-            http_config.crt_bundle_attach        = esp_crt_bundle_attach;
-            http_config.timeout_ms               = 15000;
-            http_config.keep_alive_enable        = true;
-            http_config.buffer_size              = 4096;
-            http_config.buffer_size_tx           = 2048;
-            http_config.max_redirection_count    = 5;
-            http_config.user_agent               = "M5StopWatch";
-
             constexpr const char* UPDATE_PATH = "/spiflash/update.bin";
             FILE* f = fopen(UPDATE_PATH, "wb");
             if (!f) {
@@ -611,6 +633,30 @@ void CheckUpdateWorker::_startOtaTask()
                 vTaskDelete(NULL);
                 return;
             }
+
+            HttpRespBuf resp;
+            resp.file          = f;
+            resp.expected_size = expected_size;
+            resp.abort_flag    = &ctx->abort_requested;
+            resp.on_progress   = [&ctx](size_t received, size_t total, int progress) {
+                std::lock_guard<std::mutex> lk(ctx->mutex);
+                ctx->info.bytesReceived = received;
+                ctx->info.totalBytes    = total;
+                ctx->info.progress      = progress;
+            };
+
+            esp_http_client_config_t http_config = {};
+            http_config.url                      = url.c_str();
+            http_config.method                   = HTTP_METHOD_GET;
+            http_config.crt_bundle_attach        = esp_crt_bundle_attach;
+            http_config.timeout_ms               = 20000;
+            http_config.keep_alive_enable        = true;
+            http_config.buffer_size              = 8192;
+            http_config.buffer_size_tx           = 2048;
+            http_config.max_redirection_count    = 5;
+            http_config.user_agent               = "M5StopWatch";
+            http_config.event_handler            = http_event_cb;
+            http_config.user_data                = &resp;
 
             esp_http_client_handle_t client = esp_http_client_init(&http_config);
             if (!client) {
@@ -625,58 +671,10 @@ void CheckUpdateWorker::_startOtaTask()
                 return;
             }
 
-            esp_err_t err = esp_http_client_open(client, 0);
-            if (err != ESP_OK) {
-                fclose(f);
-                remove(UPDATE_PATH);
-                esp_http_client_cleanup(client);
-                mclog::tagError(_tag, "esp_http_client_open failed: {}", esp_err_to_name(err));
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "Connection failed";
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            int content_len = esp_http_client_fetch_headers(client);
-            int total_len   = (content_len > 0) ? content_len : static_cast<int>(expected_size);
-            int read_total  = 0;
-            std::vector<char> buffer(4096);
-
-            while (!ctx->abort_requested.load()) {
-                int r = esp_http_client_read(client, buffer.data(), buffer.size());
-                if (r < 0) {
-                    mclog::tagError(_tag, "Error reading HTTP stream");
-                    err = ESP_FAIL;
-                    break;
-                }
-                if (r == 0) {
-                    err = ESP_OK;
-                    break;
-                }
-
-                size_t written = fwrite(buffer.data(), 1, r, f);
-                if (written != static_cast<size_t>(r)) {
-                    mclog::tagError(_tag, "Failed to write data to storage");
-                    err = ESP_FAIL;
-                    break;
-                }
-
-                read_total += r;
-                int progress = (total_len > 0) ? (read_total * 100 / total_len) : 0;
-                if (progress > 100) progress = 100;
-
-                {
-                    std::lock_guard<std::mutex> lk(ctx->mutex);
-                    ctx->info.bytesReceived = read_total;
-                    ctx->info.totalBytes    = total_len;
-                    ctx->info.progress      = progress;
-                }
-            }
+            esp_err_t err = esp_http_client_perform(client);
+            int status    = esp_http_client_get_status_code(client);
 
             fclose(f);
-            esp_http_client_close(client);
             esp_http_client_cleanup(client);
 
             if (ctx->abort_requested.load()) {
@@ -687,7 +685,12 @@ void CheckUpdateWorker::_startOtaTask()
                 return;
             }
 
-            if (err == ESP_OK && read_total > 100 * 1024) {
+            size_t read_total = resp.received_bytes;
+            mclog::tagInfo(_tag, "Download finished: err={}, status={}, bytes={}/{}", esp_err_to_name(err), status,
+                           read_total, resp.total_bytes);
+
+            if (err == ESP_OK && status == 200 && !resp.write_error && read_total > 100 * 1024 &&
+                (resp.total_bytes == 0 || read_total == resp.total_bytes)) {
                 // Verify magic byte (0xE9)
                 FILE* check_f = fopen(UPDATE_PATH, "rb");
                 uint8_t magic = 0;
@@ -730,8 +733,20 @@ void CheckUpdateWorker::_startOtaTask()
             remove(UPDATE_PATH);
             {
                 std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "Download incomplete";
+                ctx->result_step = Step::UpdateFailed;
+                if (resp.write_error) {
+                    ctx->info.errorMsg = "Storage write error";
+                } else if (err != ESP_OK) {
+                    char err_buf[64];
+                    snprintf(err_buf, sizeof(err_buf), "Download error (%s)", esp_err_to_name(err));
+                    ctx->info.errorMsg = err_buf;
+                } else if (status != 200) {
+                    char err_buf[64];
+                    snprintf(err_buf, sizeof(err_buf), "HTTP error (%d)", status);
+                    ctx->info.errorMsg = err_buf;
+                } else {
+                    ctx->info.errorMsg = "Download incomplete";
+                }
             }
             ctx->finished.store(true);
             vTaskDelete(NULL);

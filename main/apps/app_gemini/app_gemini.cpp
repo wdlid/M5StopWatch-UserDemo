@@ -30,7 +30,6 @@ void AppGemini::onOpen()
     _web_server        = std::make_unique<gemini::GeminiConfigServer>();
     _is_talking_active = false;
     _talk_release_ms   = 0;
-    _last_ui_update_ms = 0;
 
     // Ensure Wi-Fi is enabled when opening Gemini Live
     if (!GetHAL().isWifiEnabled()) {
@@ -138,13 +137,6 @@ void AppGemini::onRunning()
         auto cfg = gemini::GeminiConfig::loadFromNvs();
         _client->start(cfg);
     }
-
-    // Rate-limit UI and spectrum updates to ~40 FPS (every 25 ms)
-    const uint32_t now = GetHAL().millis();
-    if (now - _last_ui_update_ms < 25) {
-        return;
-    }
-    _last_ui_update_ms = now;
 
     // Audio spectrum & volume updates (skip mic read while PTT talking or AI speaking)
     if (!_is_talking_active && (!_client || _client->getState() != gemini::SessionState::Speaking)) {
