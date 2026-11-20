@@ -3907,7 +3907,7 @@ CONFIG_LV_USE_DRAW_SW_ASM=0
 # CONFIG_LV_USE_DRAW_SDL is not set
 # default:
 # CONFIG_LV_USE_DRAW_VG_LITE is not set
-CONFIG_LV_USE_VECTOR_GRAPHIC=y
+# CONFIG_LV_USE_VECTOR_GRAPHIC is not set
 # default:
 # CONFIG_LV_USE_DRAW_DMA2D is not set
 # default:
@@ -3973,8 +3973,6 @@ CONFIG_LV_OBJ_STYLE_CACHE=y
 # CONFIG_LV_USE_OBJ_NAME is not set
 # default:
 # CONFIG_LV_USE_OBJ_PROPERTY is not set
-# default:
-# CONFIG_LV_USE_VG_LITE_THORVG is not set
 # default:
 # CONFIG_LV_USE_GESTURE_RECOGNITION is not set
 # default:
@@ -4184,7 +4182,6 @@ CONFIG_LV_USE_LED=y
 CONFIG_LV_USE_LINE=y
 # default:
 CONFIG_LV_USE_LIST=y
-CONFIG_LV_USE_LOTTIE=y
 # default:
 CONFIG_LV_USE_MENU=y
 # default:
@@ -4288,8 +4285,6 @@ CONFIG_LV_USE_TJPGD=y
 # default:
 # CONFIG_LV_BIN_DECODER_RAM_LOAD is not set
 # default:
-# CONFIG_LV_USE_SVG is not set
-# default:
 # CONFIG_LV_USE_RLE is not set
 # default:
 # CONFIG_LV_USE_QRCODE is not set
@@ -4301,9 +4296,7 @@ CONFIG_LV_USE_TJPGD=y
 # CONFIG_LV_USE_TINY_TTF is not set
 # default:
 # CONFIG_LV_USE_RLOTTIE is not set
-CONFIG_LV_USE_THORVG=y
-CONFIG_LV_USE_THORVG_INTERNAL=y
-# CONFIG_LV_USE_THORVG_EXTERNAL is not set
+# CONFIG_LV_USE_THORVG is not set
 # default:
 # CONFIG_LV_USE_NANOVG is not set
 # default:

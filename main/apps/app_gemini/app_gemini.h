@@ -30,4 +30,5 @@ private:
     std::unique_ptr<gemini::GeminiConfigServer> _web_server;
     bool _is_talking_active      = false;
     uint32_t _talk_release_ms    = 0;
+    uint32_t _last_ui_update_ms  = 0;
 };
