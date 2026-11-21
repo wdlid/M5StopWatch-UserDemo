@@ -101,6 +101,23 @@ public:
             .sample_rate     = sample_rate,
         };
         esp_codec_dev_open(_codec_dev, &fs);
+
+        // Calibrated psychoacoustic volume curve:
+        // Default linear mapping (-50dB to 0dB) sets default vol 80 to -10dB (too quiet).
+        // Mapping: 0 -> -50dB, 40 -> -16dB, 60 -> -9dB, 80 -> -3dB, 100 -> 0dB (clean 100% full scale DAC output).
+        static esp_codec_dev_vol_map_t vol_map[] = {
+            {.vol = 0,   .db_value = -50.0f},
+            {.vol = 20,  .db_value = -28.0f},
+            {.vol = 40,  .db_value = -16.0f},
+            {.vol = 60,  .db_value = -9.0f},
+            {.vol = 80,  .db_value = -3.0f},
+            {.vol = 100, .db_value = 0.0f},
+        };
+        esp_codec_dev_vol_curve_t vol_curve = {
+            .vol_map = vol_map,
+            .count   = sizeof(vol_map) / sizeof(vol_map[0]),
+        };
+        esp_codec_dev_set_vol_curve(_codec_dev, &vol_curve);
     }
 
     void updateSpectrum()
@@ -226,12 +243,6 @@ public:
         // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with continuous phase across chunks
         const float step = static_cast<float>(std::max(8000, srcRate)) / static_cast<float>(sample_rate);
 
-        // Apply clean linear speech gain (+3.2 dB) with transparent soft-knee peak limiting above +/-29500
-        // to preserve original timbre and audio quality while preventing digital clipping on rare peaks
-        constexpr float speech_gain     = 1.45f;
-        constexpr float soft_knee_start = 29500.0f;
-        constexpr float soft_knee_span  = 3267.0f;
-
         float sum_sq            = 0.0f;
         std::size_t out_samples = 0;
         bool trigger_task       = false;
@@ -267,21 +278,15 @@ public:
                     s1                     = static_cast<float>(samples[idx1]);
                 }
 
-                float val = (s0 * (1.0f - frac) + s1 * frac) * speech_gain;
+                // Clean 1:1 original speech signal without digital clipping or harmonic waveshaping distortion
+                // Proper volume & loudness are controlled via ES8311 DAC hardware volume curve
+                float val = s0 * (1.0f - frac) + s1 * frac;
 
                 // Apply 64-sample cosine fade-in at the very beginning of a new stream burst
                 if (starting_fresh && out_samples < 64) {
                     const float fade =
                         0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * static_cast<float>(out_samples) / 64.0f));
                     val *= fade;
-                }
-
-                if (val > soft_knee_start) {
-                    const float excess = (val - soft_knee_start) / soft_knee_span;
-                    val                = soft_knee_start + soft_knee_span * (excess / (1.0f + excess));
-                } else if (val < -soft_knee_start) {
-                    const float excess = (-val - soft_knee_start) / soft_knee_span;
-                    val                = -soft_knee_start - soft_knee_span * (excess / (1.0f + excess));
                 }
 
                 int16_t sample_val = static_cast<int16_t>(std::clamp(val, -32768.0f, 32767.0f));
@@ -594,16 +599,9 @@ private:
                         continue;
                     }
 
-                    // Stream finished: apply short cosine fade-out from last sample + silence tail to prevent DMA pop
-                    int16_t last_sample = last_stream_val;
-                    std::array<int16_t, 128> fade_out = {};
-                    for (std::size_t i = 0; i < fade_out.size(); ++i) {
-                        float env   = 0.5f * (1.0f + std::cos(static_cast<float>(M_PI) * static_cast<float>(i) / static_cast<float>(fade_out.size())));
-                        fade_out[i] = static_cast<int16_t>(last_sample * env);
-                    }
-                    esp_codec_dev_write(_codec_dev, (void*)fade_out.data(), fade_out.size() * sizeof(int16_t));
+                    // Stream finished: flush silence tail to ensure clean DMA buffer without popping
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                        _silence_buffer.size() * sizeof(int16_t));
+                                        std::min<std::size_t>(_silence_buffer.size(), 512) * sizeof(int16_t));
 
                     _current_rms.store(0.0f, std::memory_order_relaxed);
                     {
