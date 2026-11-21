@@ -247,6 +247,73 @@ Hal::ColorTemp Hal::getColorTemperature(bool loadFromSettings)
     return _color_temp.load(std::memory_order_acquire);
 }
 
+/* ---------------------------------- Theme --------------------------------- */
+static const Hal::GlobalTheme _theme_dark = {
+    .background         = 0x000000,
+    .cardBackground     = 0x1B1F24,
+    .cardPressed        = 0x2A3038,
+    .textPrimary        = 0xFFFFFF,
+    .textSecondary      = 0x8FA0B0,
+    .textMuted          = 0x5A6570,
+    .border             = 0x2A3038,
+    .accent             = 0x4AD78C,
+    .statusBarPrimary   = 0x385179,
+    .statusBarSecondary = 0xEDF4FF,
+};
+
+static const Hal::GlobalTheme _theme_light = {
+    .background         = 0xDCE5E1,  // 素雅浅天青，非纯白，素雅温润
+    .cardBackground     = 0xCCD8D2,  // 柔和青瓷卡片底色
+    .cardPressed        = 0xBAC9C2,  // 按下交互反馈底色
+    .textPrimary        = 0x26332D,  // 深青墨松色，高对比清晰易读
+    .textSecondary      = 0x587066,  // 黛绿/灰绿说明文字
+    .textMuted          = 0x83968D,  // 弱化提示/指示箭头
+    .border             = 0xB6C5BE,  // 柔和分割线
+    .accent             = 0x2E8B57,  // 典雅翡翠绿强调色
+    .statusBarPrimary   = 0x587066,  // 状态栏前景色
+    .statusBarSecondary = 0x26332D,  // 状态栏背景色
+};
+
+static std::atomic<Hal::ThemeMode> _theme_mode{Hal::ThemeMode::Dark};
+
+void Hal::setThemeMode(Hal::ThemeMode mode, bool saveToSettings)
+{
+    _theme_mode.store(mode, std::memory_order_release);
+    mclog::tagInfo(_tag, "set theme mode: {}", mode == ThemeMode::Dark ? "Dark" : "Light");
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("theme_mode", static_cast<int>(mode));
+        mclog::tagInfo(_tag, "theme mode saved to settings: {}", static_cast<int>(mode));
+    }
+
+    if (lv_is_initialized()) {
+        LvglLockGuard lock;
+        uitk::lvgl_cpp::ScreenActive screen;
+        screen.setBgColor(lv_color_hex(getTheme().background));
+        lv_obj_invalidate(lv_screen_active());
+    }
+}
+
+Hal::ThemeMode Hal::getThemeMode(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        int val = settings.GetInt("theme_mode", 0);
+        if (val < 0 || val > 1) {
+            val = 0;
+        }
+        _theme_mode.store(static_cast<ThemeMode>(val), std::memory_order_release);
+        mclog::tagInfo(_tag, "theme mode loaded from settings: {}", val);
+    }
+    return _theme_mode.load(std::memory_order_acquire);
+}
+
+const Hal::GlobalTheme& Hal::getTheme() const
+{
+    return (_theme_mode.load(std::memory_order_acquire) == ThemeMode::Light) ? _theme_light : _theme_dark;
+}
+
 void Hal::display_init()
 {
     mclog::tagInfo(_tag, "display init");
@@ -275,6 +342,9 @@ void Hal::display_init()
 
     // Load color temperature from settings
     getColorTemperature(true);
+
+    // Load theme from settings
+    getThemeMode(true);
 
     getScreenTimeout(true);
     _last_activity_time = millis();
@@ -608,7 +678,7 @@ void Hal::lvgl_init()
     {
         LvglLockGuard lock;
         uitk::lvgl_cpp::ScreenActive screen;
-        screen.setBgColor(lv_color_black());
+        screen.setBgColor(lv_color_hex(getTheme().background));
         GetHAL().bootLogo = std::make_unique<BootLogo>();
     }
 }

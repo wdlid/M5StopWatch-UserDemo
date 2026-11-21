@@ -169,6 +169,28 @@ public:
         Warm     = 2,  // 护眼暖色
     };
 
+    enum class ThemeMode : uint8_t {
+        Dark  = 0,  // 经典深色（AMOLED 纯黑）
+        Light = 1,  // 素雅浅色（淡天青，非纯白，温润静谧）
+    };
+
+    struct GlobalTheme {
+        uint32_t background;          // 主背景色
+        uint32_t cardBackground;      // 卡片/容器底色
+        uint32_t cardPressed;         // 按下卡片底色
+        uint32_t textPrimary;         // 主标题/主要文字
+        uint32_t textSecondary;       // 次级说明文字
+        uint32_t textMuted;           // 弱化文字/指示箭头
+        uint32_t border;              // 边框/分隔线
+        uint32_t accent;              // 强调色
+        uint32_t statusBarPrimary;    // 状态栏前景色
+        uint32_t statusBarSecondary;  // 状态栏背景色
+    };
+
+    void setThemeMode(ThemeMode mode, bool saveToSettings = true);
+    ThemeMode getThemeMode(bool loadFromSettings = false);
+    const GlobalTheme& getTheme() const;
+
     void setColorTemperature(ColorTemp temp, bool saveToSettings = false);
     ColorTemp getColorTemperature(bool loadFromSettings = false);
     void setBackLightBrightness(int brightness, bool saveToSettings = false);

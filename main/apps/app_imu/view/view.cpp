@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "view.h"
+#include <hal/hal.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -122,7 +123,7 @@ void ImuView::init(lv_obj_t* parent)
     _panel = std::make_unique<Container>(parent);
     _panel->align(LV_ALIGN_CENTER, 0, 0);
     _panel->setSize(_panel_size, _panel_size);
-    _panel->setBgColor(lv_color_hex(_bg_color));
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->setBorderWidth(0);
     _panel->setOutlineWidth(0);

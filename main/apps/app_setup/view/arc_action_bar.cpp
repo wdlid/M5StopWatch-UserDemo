@@ -43,7 +43,7 @@ std::unique_ptr<Container> create_hit_area(lv_obj_t* parent, int x, int y, lv_ev
     hit->setRadius(36);
     hit->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     hit->addFlag(LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(hit->get(), lv_color_hex(0xFFFFFF), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(hit->get(), lv_color_hex(GetHAL().getTheme().textPrimary), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(hit->get(), LV_OPA_20, LV_STATE_PRESSED);
     lv_obj_add_event_cb(hit->get(), cb, LV_EVENT_CLICKED, userData);
     return hit;
@@ -102,7 +102,7 @@ ArcActionBar::ArcActionBar(lv_obj_t* parent,
     _title_label = std::make_unique<Label>(parent);
     _title_label->align(LV_ALIGN_TOP_MID, 0, 56);
     _title_label->setTextFont(&MontserratSemiBold26);
-    _title_label->setTextColor(lv_color_hex(0xFFFFFF));
+    _title_label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
     _title_label->setWidth(240);
     _title_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _title_label->setLongMode(LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);

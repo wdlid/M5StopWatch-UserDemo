@@ -162,7 +162,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
     case MenuPageId::Root: {
         cfg.title              = "Settings";
         cfg.leftActionText     = "Exit";
-        cfg.leftActionColor    = 0x9EB3C2;
+        cfg.leftActionColor    = GetHAL().getTheme().textSecondary;
         cfg.initialScrollIndex = _root_scroll_index;
         cfg.onLeftAction       = [this]() { close(); };
 
@@ -173,11 +173,12 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         const auto wifi_status    = GetHAL().getWifiStatus();
         const auto time_hms       = GetHAL().getTimeHms();
         const std::string tz      = GetHAL().getTimezone();
+        const auto theme_mode     = GetHAL().getThemeMode();
 
         cfg.items = {
             {
                 "Display",
-                fmt::format("{}%  /  {}", brightness, format_timeout(timeout)),
+                fmt::format("{}  /  {}%", theme_mode == Hal::ThemeMode::Dark ? "Dark" : "Light", brightness),
                 LV_SYMBOL_IMAGE,
                 0xFFB74D,
                 true,
@@ -222,11 +223,19 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
     case MenuPageId::Display: {
         cfg.title              = "Display";
         cfg.leftActionText     = "Back";
-        cfg.leftActionColor    = 0x9EB3C2;
+        cfg.leftActionColor    = GetHAL().getTheme().textSecondary;
         cfg.initialScrollIndex = _sub_scroll_index;
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 
         cfg.items = {
+            {
+                "Theme",
+                GetHAL().getThemeMode() == Hal::ThemeMode::Dark ? "Dark" : "Light (Celadon)",
+                LV_SYMBOL_IMAGE,
+                0x4DD0E1,
+                true,
+                [launch_worker]() { launch_worker([]() { return std::make_unique<ThemeWorker>(); }); },
+            },
             {
                 "Brightness",
                 fmt::format("{}%", GetHAL().getBackLightBrightness()),
@@ -266,7 +275,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
     case MenuPageId::Sound: {
         cfg.title              = "Sound";
         cfg.leftActionText     = "Back";
-        cfg.leftActionColor    = 0x9EB3C2;
+        cfg.leftActionColor    = GetHAL().getTheme().textSecondary;
         cfg.initialScrollIndex = _sub_scroll_index;
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 
@@ -294,7 +303,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
     case MenuPageId::DateTime: {
         cfg.title              = "Time & Date";
         cfg.leftActionText     = "Back";
-        cfg.leftActionColor    = 0x9EB3C2;
+        cfg.leftActionColor    = GetHAL().getTheme().textSecondary;
         cfg.initialScrollIndex = _sub_scroll_index;
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 
@@ -333,7 +342,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
     case MenuPageId::System: {
         cfg.title              = "System";
         cfg.leftActionText     = "Back";
-        cfg.leftActionColor    = 0x9EB3C2;
+        cfg.leftActionColor    = GetHAL().getTheme().textSecondary;
         cfg.initialScrollIndex = _sub_scroll_index;
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 

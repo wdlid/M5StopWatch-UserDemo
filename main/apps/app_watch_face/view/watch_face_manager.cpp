@@ -40,7 +40,7 @@ void WatchFaceManager::init()
     _panel = std::make_unique<Container>(lv_screen_active());
     _panel->align(LV_ALIGN_CENTER, 0, 0);
     _panel->setSize(_panel_size, _panel_size);
-    _panel->setBgColor(lv_color_black());
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->setPaddingAll(0);
     _panel->setBorderWidth(0);
     _panel->setRadius(0);

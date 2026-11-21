@@ -22,35 +22,37 @@ namespace {
 
 void style_modern_switch(Switch& sw, bool initialValue)
 {
+    auto& theme = GetHAL().getTheme();
     sw.setSize(76, 42);
     sw.setValue(initialValue);
-    sw.setBgColor(lv_color_hex(0x2F363D), LV_PART_MAIN);
+    sw.setBgColor(lv_color_hex(theme.cardPressed), LV_PART_MAIN);
     sw.setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
     sw.setBorderWidth(0, LV_PART_MAIN);
     sw.setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sw.get(), lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(sw.get(), lv_color_hex(theme.background), LV_PART_KNOB);
     lv_obj_set_style_bg_opa(sw.get(), LV_OPA_COVER, LV_PART_KNOB);
     lv_obj_set_style_border_width(sw.get(), 0, LV_PART_KNOB);
     lv_obj_set_style_radius(sw.get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
-    sw.setBgColor(lv_color_hex(0x4AD78C), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    sw.setBgColor(lv_color_hex(theme.accent), LV_PART_INDICATOR | LV_STATE_CHECKED);
     sw.setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR | LV_STATE_CHECKED);
     sw.setBorderWidth(0, LV_PART_INDICATOR | LV_STATE_CHECKED);
 }
 
 void style_modern_roller(Roller& roller)
 {
+    auto& theme = GetHAL().getTheme();
     lv_obj_set_style_radius(roller.get(), 48, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(0x1B1F24), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(theme.cardBackground), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(roller.get(), LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(roller.get(), 0, LV_PART_MAIN);
     lv_obj_set_style_text_font(roller.get(), &lv_font_montserrat_26, LV_PART_MAIN);
-    lv_obj_set_style_text_color(roller.get(), lv_color_hex(0x8FA0B0), LV_PART_MAIN);
+    lv_obj_set_style_text_color(roller.get(), lv_color_hex(theme.textSecondary), LV_PART_MAIN);
     lv_obj_set_style_text_align(roller.get(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(roller.get(), 20, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(0x264D3B), LV_PART_SELECTED);
+    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(theme.cardPressed), LV_PART_SELECTED);
     lv_obj_set_style_bg_opa(roller.get(), LV_OPA_COVER, LV_PART_SELECTED);
     lv_obj_set_style_text_font(roller.get(), &lv_font_montserrat_28, LV_PART_SELECTED);
-    lv_obj_set_style_text_color(roller.get(), lv_color_hex(0x4AD78C), LV_PART_SELECTED);
+    lv_obj_set_style_text_color(roller.get(), lv_color_hex(theme.accent), LV_PART_SELECTED);
     lv_obj_set_style_text_align(roller.get(), LV_TEXT_ALIGN_CENTER, LV_PART_SELECTED);
     lv_obj_set_style_border_width(roller.get(), 0, LV_PART_SELECTED);
 }
@@ -63,7 +65,7 @@ std::unique_ptr<Container> create_root_panel()
     panel->setRadius(0);
     panel->setBorderWidth(0);
     panel->setPaddingAll(0);
-    panel->setBgColor(lv_color_hex(0x000000));
+    panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     panel->setBgOpa(LV_OPA_COVER);
     panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     return panel;
@@ -87,7 +89,7 @@ public:
         _value_label = std::make_unique<Label>(_panel->get());
         _value_label->align(LV_ALIGN_CENTER, -8, -42);
         _value_label->setTextFont(&CommissionerMedium108);
-        _value_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _value_label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
 
         _unit_label = std::make_unique<Label>(_panel->get());
         _unit_label->setText("%");
@@ -100,7 +102,7 @@ public:
         _slider->setSize(336, 30);
         _slider->setRange(_min_value, _max_value, false);
         _slider->setValue(_current_value);
-        _slider->setBgColor(lv_color_hex(0x1F2429), LV_PART_MAIN);
+        _slider->setBgColor(lv_color_hex(GetHAL().getTheme().cardBackground), LV_PART_MAIN);
         _slider->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
         _slider->setBorderWidth(0, LV_PART_MAIN);
         _slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
@@ -108,7 +110,7 @@ public:
         _slider->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR);
         _slider->setBorderWidth(0, LV_PART_INDICATOR);
         _slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(_slider->get(), lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+        lv_obj_set_style_bg_color(_slider->get(), lv_color_hex(GetHAL().getTheme().textPrimary), LV_PART_KNOB);
         lv_obj_set_style_bg_opa(_slider->get(), LV_OPA_COVER, LV_PART_KNOB);
         lv_obj_set_style_border_width(_slider->get(), 0, LV_PART_KNOB);
         lv_obj_set_style_radius(_slider->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
@@ -165,11 +167,11 @@ private:
         btn->setRadius(28);
         btn->setBorderWidth(0);
         btn->setShadowWidth(0);
-        btn->setBgColor(lv_color_hex(0x1B1F24));
-        lv_obj_set_style_bg_color(btn->get(), lv_color_hex(0x2C3238), LV_STATE_PRESSED);
+        btn->setBgColor(lv_color_hex(GetHAL().getTheme().cardBackground));
+        lv_obj_set_style_bg_color(btn->get(), lv_color_hex(GetHAL().getTheme().cardPressed), LV_STATE_PRESSED);
         btn->label().setText(symbol);
         btn->label().setTextFont(&lv_font_montserrat_24);
-        btn->label().setTextColor(lv_color_hex(0xFFFFFF));
+        btn->label().setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
         btn->label().align(LV_ALIGN_CENTER, 0, 0);
         btn->onClick().connect(std::move(onClick));
         return btn;
@@ -260,7 +262,7 @@ private:
         auto row = std::make_unique<Container>(_panel->get());
         row->setSize(356, 82);
         row->align(LV_ALIGN_TOP_MID, 0, y);
-        row->setBgColor(lv_color_hex(0x1B1F24));
+        row->setBgColor(lv_color_hex(GetHAL().getTheme().cardBackground));
         row->setBgOpa(LV_OPA_COVER);
         row->setBorderWidth(0);
         row->setShadowWidth(0);
@@ -271,7 +273,7 @@ private:
         auto label = std::make_unique<Label>(row->get());
         label->setText(title);
         label->setTextFont(&lv_font_montserrat_22);
-        label->setTextColor(lv_color_hex(0xFFFFFF));
+        label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
         label->align(LV_ALIGN_LEFT_MID, 28, 0);
 
         auto switch_widget = std::make_unique<Switch>(row->get());
@@ -341,7 +343,7 @@ private:
         auto row = std::make_unique<Container>(_panel->get());
         row->setSize(356, 82);
         row->align(LV_ALIGN_TOP_MID, 0, y);
-        row->setBgColor(lv_color_hex(0x1B1F24));
+        row->setBgColor(lv_color_hex(GetHAL().getTheme().cardBackground));
         row->setBgOpa(LV_OPA_COVER);
         row->setBorderWidth(0);
         row->setShadowWidth(0);
@@ -352,7 +354,7 @@ private:
         auto label = std::make_unique<Label>(row->get());
         label->setText(title);
         label->setTextFont(&lv_font_montserrat_22);
-        label->setTextColor(lv_color_hex(0xFFFFFF));
+        label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
         label->align(LV_ALIGN_LEFT_MID, 28, 0);
 
         auto switch_widget = std::make_unique<Switch>(row->get());
@@ -760,6 +762,105 @@ ColorTempWorker::~ColorTempWorker()
 {
     if (!_saved) {
         GetHAL().setColorTemperature(_initial_temp, false);
+        lv_obj_invalidate(lv_screen_active());
+    }
+}
+
+class ThemeWorker::ThemeView {
+public:
+    explicit ThemeView(Hal::ThemeMode initialTheme)
+    {
+        _selected_theme = initialTheme;
+        _panel          = create_root_panel();
+
+        _roller = std::make_unique<Roller>(_panel->get());
+        _roller->align(LV_ALIGN_CENTER, 0, 22);
+        _roller->setSize(320, 220);
+        _roller->setOptions("Dark (AMOLED)\nLight (Celadon)", LV_ROLLER_MODE_NORMAL);
+        _roller->setVisibleRowCount(2);
+        style_modern_roller(*_roller);
+
+        uint32_t sel_idx = static_cast<uint32_t>(initialTheme);
+        if (sel_idx > 1) {
+            sel_idx = 0;
+        }
+
+        _roller->setSelected(sel_idx, LV_ANIM_OFF);
+        _roller->onValueChanged().connect([this](uint32_t index) {
+            if (index <= 1) {
+                _selected_theme = static_cast<Hal::ThemeMode>(index);
+            }
+        });
+
+        _action_bar = std::make_unique<view::ArcActionBar>(_panel->get(), "Cancel", "OK", "Theme");
+    }
+
+    void update()
+    {
+        if (_action_bar) {
+            _action_bar->update();
+        }
+    }
+
+    Hal::ThemeMode selectedTheme() const
+    {
+        return _selected_theme;
+    }
+
+    bool consumeSaveRequested()
+    {
+        return _action_bar && _action_bar->consumeRightClicked();
+    }
+
+    bool consumeCancelRequested()
+    {
+        return _action_bar && _action_bar->consumeLeftClicked();
+    }
+
+private:
+    std::unique_ptr<Container> _panel;
+    std::unique_ptr<Roller> _roller;
+    std::unique_ptr<view::ArcActionBar> _action_bar;
+    Hal::ThemeMode _selected_theme = Hal::ThemeMode::Dark;
+};
+
+ThemeWorker::ThemeWorker()
+{
+    mclog::tagInfo(_tag, "start theme worker");
+    _applied_theme = GetHAL().getThemeMode();
+    _initial_theme = _applied_theme;
+    _view          = std::make_unique<ThemeView>(_applied_theme);
+}
+
+void ThemeWorker::update()
+{
+    if (!_view) {
+        return;
+    }
+    _view->update();
+
+    if (_applied_theme != _view->selectedTheme()) {
+        GetHAL().setThemeMode(_view->selectedTheme(), false);
+        _applied_theme = _view->selectedTheme();
+        lv_obj_invalidate(lv_screen_active());
+    }
+
+    if (_view->consumeCancelRequested()) {
+        _is_done = true;
+        return;
+    }
+
+    if (_view->consumeSaveRequested()) {
+        GetHAL().setThemeMode(_view->selectedTheme(), true);
+        _saved   = true;
+        _is_done = true;
+    }
+}
+
+ThemeWorker::~ThemeWorker()
+{
+    if (!_saved) {
+        GetHAL().setThemeMode(_initial_theme, false);
         lv_obj_invalidate(lv_screen_active());
     }
 }

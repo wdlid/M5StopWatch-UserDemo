@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "view.h"
+#include <hal/hal.h>
 #include <assets/assets.h>
 #include <mooncake_log.h>
 #include <cstdio>
@@ -99,7 +100,7 @@ void AlarmListView::init(lv_obj_t* parent)
 {
     _panel = std::make_unique<Container>(parent);
     _panel->setSize(_panel_width, _panel_height);
-    _panel->setBgColor(lv_color_hex(_bg_color));
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->setPadding(0, 72, 0, 0);
     _panel->setBorderWidth(0);
     _panel->setRadius(0);

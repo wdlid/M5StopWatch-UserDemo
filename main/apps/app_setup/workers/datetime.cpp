@@ -34,18 +34,19 @@ std::string build_number_options(int begin, int end, int width = 2)
 
 void apply_selector_style(Roller& roller)
 {
+    auto& theme = GetHAL().getTheme();
     lv_obj_set_style_radius(roller.get(), 42, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(0x1B1F24), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(theme.cardBackground), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(roller.get(), LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(roller.get(), 0, LV_PART_MAIN);
     lv_obj_set_style_text_font(roller.get(), &lv_font_montserrat_26, LV_PART_MAIN);
-    lv_obj_set_style_text_color(roller.get(), lv_color_hex(0x8FA0B0), LV_PART_MAIN);
+    lv_obj_set_style_text_color(roller.get(), lv_color_hex(theme.textSecondary), LV_PART_MAIN);
     lv_obj_set_style_text_align(roller.get(), LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_pad_ver(roller.get(), 20, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(0x264D3B), LV_PART_SELECTED);
+    lv_obj_set_style_bg_color(roller.get(), lv_color_hex(theme.cardPressed), LV_PART_SELECTED);
     lv_obj_set_style_bg_opa(roller.get(), LV_OPA_COVER, LV_PART_SELECTED);
     lv_obj_set_style_text_font(roller.get(), &lv_font_montserrat_28, LV_PART_SELECTED);
-    lv_obj_set_style_text_color(roller.get(), lv_color_hex(0x4AD78C), LV_PART_SELECTED);
+    lv_obj_set_style_text_color(roller.get(), lv_color_hex(theme.accent), LV_PART_SELECTED);
     lv_obj_set_style_text_align(roller.get(), LV_TEXT_ALIGN_CENTER, LV_PART_SELECTED);
     lv_obj_set_style_border_width(roller.get(), 0, LV_PART_SELECTED);
 }
@@ -58,7 +59,7 @@ std::unique_ptr<Container> create_root_panel()
     panel->setRadius(0);
     panel->setBorderWidth(0);
     panel->setPaddingAll(0);
-    panel->setBgColor(lv_color_hex(0x000000));
+    panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     panel->setBgOpa(LV_OPA_COVER);
     panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     return panel;

@@ -61,10 +61,10 @@ void StopwatchView::init(lv_obj_t* parent)
     _stopwatch = std::make_unique<model::Stopwatch>();
 
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(parent, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(parent, lv_color_hex(GetHAL().getTheme().background), LV_PART_MAIN);
 
     _arc_top_clock        = std::make_unique<ArcTopClock>(parent);
-    _arc_top_clock->color = _color_status_bar_clock;
+    _arc_top_clock->color = GetHAL().getTheme().textPrimary;
     _arc_top_clock->init();
     _arc_top_clock->align(LV_ALIGN_TOP_MID, 0, 4);
 

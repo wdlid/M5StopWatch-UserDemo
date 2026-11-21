@@ -38,7 +38,7 @@ constexpr std::array<const char*, 7> _weekday_map = {
     "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
 };
 
-constexpr std::array<Theme, 10> _themes = {
+constexpr std::array<Theme, 11> _themes = {
     Theme{0x000000, 0x1A1919, 0xFFFFFF, 0xA0A0A0},  //
     Theme{0xEEEEEE, 0xE4E3E3, 0x484848, 0x525252},  //
     Theme{0xC2EFEB, 0xB1E1DD, 0x566E6C, 0x6A938F},  //
@@ -49,6 +49,7 @@ constexpr std::array<Theme, 10> _themes = {
     Theme{0xF2D7EE, 0xE9C9E5, 0x83627E, 0xA4789D},  //
     Theme{0x048A81, 0x05968C, 0xB1FFFA, 0x70CFC9},  //
     Theme{0x9DB4C0, 0x92A8B3, 0xECF8FF, 0xDCF3FF},  //
+    Theme{0xDCE5E1, 0xCCD8D2, 0x33473E, 0x587268},  // 素雅浅天青 / Celadon Mist
 };
 
 void setup_panel(Container& panel, int x_offset, int y_offset)
@@ -78,7 +79,7 @@ void setup_number_flow(NumberFlow& number_flow)
 
 void WatchFaceNumberFlow::onCreate(lv_obj_t* parent)
 {
-    _theme_index = 0;
+    _theme_index = (GetHAL().getThemeMode() == Hal::ThemeMode::Light) ? 10 : 0;
 
     _background_panel = std::make_unique<Container>(parent);
     _background_panel->align(LV_ALIGN_CENTER, 0, 0);

@@ -393,6 +393,10 @@ static std::unique_ptr<StatusBar> _status_bar;
 
 void create_status_bar(uint32_t colorSecondary, uint32_t colorPrimary, bool silent, lv_obj_t* parent)
 {
+    if (colorSecondary == 0xEDF4FF && colorPrimary == 0x385179) {
+        colorSecondary = GetHAL().getTheme().statusBarSecondary;
+        colorPrimary   = GetHAL().getTheme().statusBarPrimary;
+    }
     _status_bar = std::make_unique<StatusBar>();
     _status_bar->init(parent, colorSecondary, colorPrimary, silent);
 }

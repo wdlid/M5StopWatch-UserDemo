@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "view.h"
+#include <hal/hal.h>
 #include <assets/assets.h>
 #include <cstdio>
 
@@ -50,7 +51,7 @@ void AlarmAddView::init(lv_obj_t* parent)
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
     _panel->setPaddingAll(0);
-    _panel->setBgColor(lv_color_hex(_bg_color));
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
@@ -58,7 +59,7 @@ void AlarmAddView::init(lv_obj_t* parent)
     _title_label->align(LV_ALIGN_TOP_MID, 0, 75);
     _title_label->setText("Add Alarm");
     _title_label->setTextFont(&MontserratSemiBold26);
-    _title_label->setTextColor(lv_color_hex(_label_color));
+    _title_label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
 
     const auto hour_options = build_number_options(0, 23);
     _hour_selector          = std::make_unique<Roller>(_panel->get());

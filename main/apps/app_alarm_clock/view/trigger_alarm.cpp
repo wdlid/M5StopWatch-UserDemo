@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "view.h"
+#include <hal/hal.h>
 #include <assets/assets.h>
 #include <mooncake_log.h>
 #include <cstdio>
@@ -40,7 +41,7 @@ void AlarmTriggerView::init(const model::AlarmClock::Time24& time)
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
     _panel->setPaddingAll(0);
-    _panel->setBgColor(lv_color_hex(_bg_color));
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->setBgOpa(LV_OPA_COVER);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _panel->moveForeground();

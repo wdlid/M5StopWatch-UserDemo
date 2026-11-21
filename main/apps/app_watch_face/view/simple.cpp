@@ -37,7 +37,7 @@ constexpr std::array<const char*, 7> _weekday_map = {
     "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
 };
 
-constexpr std::array<Theme, 10> _themes = {
+constexpr std::array<Theme, 11> _themes = {
     Theme{0x000000, 0xA0A0A0, 0xFFFFFF, 0xA0A0A0},  //
     Theme{0xEEEEEE, 0x525252, 0x484848, 0x525252},  //
     Theme{0xC2EFEB, 0x6A938F, 0x566E6C, 0x6A938F},  //
@@ -48,6 +48,7 @@ constexpr std::array<Theme, 10> _themes = {
     Theme{0xF2D7EE, 0xA4789D, 0x83627E, 0xA4789D},  //
     Theme{0x048A81, 0x70CFC9, 0xB1FFFA, 0x70CFC9},  //
     Theme{0x9DB4C0, 0xDCF3FF, 0xECF8FF, 0xDCF3FF},  //
+    Theme{0xDCE5E1, 0x587268, 0x33473E, 0x587268},  // 素雅浅天青 / Celadon Mist
 };
 
 void setup_second_ball(Container& ball)
@@ -93,7 +94,7 @@ void WatchFaceSimple::handleLongPressed(lv_event_t* e)
 
 void WatchFaceSimple::onCreate(lv_obj_t* parent)
 {
-    _theme_index             = 0;
+    _theme_index             = (GetHAL().getThemeMode() == Hal::ThemeMode::Light) ? 10 : 0;
     _orbit_angle_initialized = false;
     _orbit_angle_unwrapped   = 0.0f;
 

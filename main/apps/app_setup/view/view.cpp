@@ -26,9 +26,11 @@ constexpr int kBottomPad    = 156;
 
 SelectMenuPage::SelectMenuPage(Config config) : _config(std::move(config))
 {
+    auto& theme = GetHAL().getTheme();
+
     _root = std::make_unique<Container>(lv_screen_active());
     _root->setSize(kScreenSize, kScreenSize);
-    _root->setBgColor(lv_color_hex(0x000000));
+    _root->setBgColor(lv_color_hex(theme.background));
     _root->setBgOpa(LV_OPA_COVER);
     _root->setBorderWidth(0);
     _root->setPaddingAll(0);
@@ -38,7 +40,7 @@ SelectMenuPage::SelectMenuPage(Config config) : _config(std::move(config))
     _list = std::make_unique<Container>(_root->get());
     _list->setSize(kScreenSize, kScreenSize);
     _list->align(LV_ALIGN_CENTER, 0, 0);
-    _list->setBgColor(lv_color_hex(0x000000));
+    _list->setBgColor(lv_color_hex(theme.background));
     _list->setBgOpa(LV_OPA_COVER);
     _list->setBorderWidth(0);
     _list->setPadding(0, 0, 0, 0);
@@ -83,7 +85,7 @@ SelectMenuPage::SelectMenuPage(Config config) : _config(std::move(config))
         },
         LV_EVENT_ALL, this);
 
-    // Subtle dark top header backdrop so curved controls & title stay crisp over scrolling rows
+    // Subtle top header backdrop so curved controls & title stay crisp over scrolling rows
     _top_fade = std::make_unique<Container>(_root->get());
     _top_fade->setSize(kScreenSize, 104);
     _top_fade->align(LV_ALIGN_TOP_MID, 0, 0);
@@ -92,8 +94,8 @@ SelectMenuPage::SelectMenuPage(Config config) : _config(std::move(config))
     _top_fade->setRadius(0);
     _top_fade->removeFlag(LV_OBJ_FLAG_CLICKABLE);
     _top_fade->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(_top_fade->get(), lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_grad_color(_top_fade->get(), lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_top_fade->get(), lv_color_hex(theme.background), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_color(_top_fade->get(), lv_color_hex(theme.background), LV_PART_MAIN);
     lv_obj_set_style_bg_grad_dir(_top_fade->get(), LV_GRAD_DIR_VER, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(_top_fade->get(), LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_grad_stop(_top_fade->get(), 255, LV_PART_MAIN);
@@ -162,6 +164,7 @@ int SelectMenuPage::currentCenterIndex() const
 void SelectMenuPage::create_item_row(int y, const MenuItem& item, int itemIdx)
 {
     RowWidgets row;
+    auto& theme = GetHAL().getTheme();
     row.centerY = y + kRowHeight / 2;
 
     row.card = std::make_unique<Container>(_list->get());
@@ -171,13 +174,13 @@ void SelectMenuPage::create_item_row(int y, const MenuItem& item, int itemIdx)
     row.card->setBorderWidth(0);
     row.card->setShadowWidth(0);
     row.card->setPaddingAll(0);
-    row.card->setBgColor(lv_color_hex(0x1B1F24));
+    row.card->setBgColor(lv_color_hex(theme.cardBackground));
     row.card->setBgOpa(LV_OPA_COVER);
     row.card->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     row.card->addFlag(LV_OBJ_FLAG_CLICKABLE);
     row.card->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_VER);
     row.card->setTransformPivot(kRowWidth / 2, kRowHeight / 2);
-    lv_obj_set_style_bg_color(row.card->get(), lv_color_hex(0x2A3038), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(row.card->get(), lv_color_hex(theme.cardPressed), LV_STATE_PRESSED);
 
     // Circular icon badge
     row.badge = std::make_unique<Container>(row.card->get());
@@ -206,7 +209,7 @@ void SelectMenuPage::create_item_row(int y, const MenuItem& item, int itemIdx)
     row.titleLabel = std::make_unique<Label>(row.card->get());
     row.titleLabel->setText(item.title);
     row.titleLabel->setTextFont(&lv_font_montserrat_22);
-    row.titleLabel->setTextColor(lv_color_hex(0xFFFFFF));
+    row.titleLabel->setTextColor(lv_color_hex(theme.textPrimary));
     row.titleLabel->setWidth(text_width);
     row.titleLabel->setLongMode(LV_LABEL_LONG_MODE_DOTS);
     row.titleLabel->removeFlag(LV_OBJ_FLAG_CLICKABLE);
@@ -217,7 +220,7 @@ void SelectMenuPage::create_item_row(int y, const MenuItem& item, int itemIdx)
         row.subtitleLabel = std::make_unique<Label>(row.card->get());
         row.subtitleLabel->setText(item.subtitle);
         row.subtitleLabel->setTextFont(&lv_font_montserrat_16);
-        row.subtitleLabel->setTextColor(lv_color_hex(0x8FA0B0));
+        row.subtitleLabel->setTextColor(lv_color_hex(theme.textSecondary));
         row.subtitleLabel->setWidth(text_width);
         row.subtitleLabel->setLongMode(LV_LABEL_LONG_MODE_DOTS);
         row.subtitleLabel->align(LV_ALIGN_LEFT_MID, text_x, 14);
@@ -230,7 +233,7 @@ void SelectMenuPage::create_item_row(int y, const MenuItem& item, int itemIdx)
         row.chevronLabel = std::make_unique<Label>(row.card->get());
         row.chevronLabel->setText(LV_SYMBOL_RIGHT);
         row.chevronLabel->setTextFont(&lv_font_montserrat_16);
-        row.chevronLabel->setTextColor(lv_color_hex(0x5A6570));
+        row.chevronLabel->setTextColor(lv_color_hex(theme.textMuted));
         row.chevronLabel->align(LV_ALIGN_RIGHT_MID, -22, 0);
         row.chevronLabel->removeFlag(LV_OBJ_FLAG_CLICKABLE);
     }

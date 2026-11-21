@@ -45,7 +45,7 @@ public:
             _dots.push_back(std::make_unique<Container>(_panel->get()));
             _dots.back()->setAlign(LV_ALIGN_CENTER);
             _dots.back()->setPos(i * dot_gap - (pageNum - 1) * dot_gap / 2, 0);
-            _dots.back()->setBgColor(lv_color_hex(0xFFFFFF));
+            _dots.back()->setBgColor(lv_color_hex(GetHAL().getTheme().textPrimary));
             _dots.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
             _dots.back()->removeFlag(LV_OBJ_FLAG_CLICKABLE);
             _dots.back()->setRadius(LV_RADIUS_CIRCLE);
@@ -124,7 +124,7 @@ public:
 
         // Create floating label
         _label = std::make_unique<Label>(parent);
-        _label->setTextColor(lv_color_hex(0xFFFFFF));
+        _label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
         _label->setTextFont(&MontserratSemiBold26);
         _label->setAlign(LV_ALIGN_CENTER);
         _label->addFlag(LV_OBJ_FLAG_FLOATING);
@@ -247,7 +247,7 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _panel->setBorderWidth(0);
     _panel->setScrollDir(LV_DIR_HOR);
     _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-    _panel->setBgColor(lv_color_hex(0x000000));
+    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
     _panel->addFlag(LV_OBJ_FLAG_SCROLL_ONE);
     _panel->removeFlag(LV_OBJ_FLAG_SCROLL_ELASTIC);
     _panel->setPaddingAll(0);
@@ -327,6 +327,8 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
     _lr_indicators_images.back()->setSrc(&icon_indicator_left);
     _lr_indicators_images.back()->align(LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_image_recolor(_lr_indicators_images.back()->get(), lv_color_hex(GetHAL().getTheme().textPrimary), 0);
+    lv_obj_set_style_image_recolor_opa(_lr_indicators_images.back()->get(), LV_OPA_COVER, 0);
 
     // Go right indicator
     _lr_indicator_panels.push_back(std::make_unique<Container>(_panel->get()));
@@ -347,6 +349,8 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
     _lr_indicators_images.back()->setSrc(&icon_indicator_right);
     _lr_indicators_images.back()->align(LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_image_recolor(_lr_indicators_images.back()->get(), lv_color_hex(GetHAL().getTheme().textPrimary), 0);
+    lv_obj_set_style_image_recolor_opa(_lr_indicators_images.back()->get(), LV_OPA_COVER, 0);
 
     /* ------------------------------ Page indicator ---------------------------- */
     _page_indicator = std::make_unique<PageIndicator>();
@@ -358,6 +362,7 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
 
     /* ---------------------------------- Clock --------------------------------- */
     _clock = std::make_unique<view::ArcTopClock>(lv_screen_active());
+    _clock->color = GetHAL().getTheme().textPrimary;
     _clock->showFullDate = true;
     _clock->init();
     _clock->align(LV_ALIGN_CENTER, 0, 0);
