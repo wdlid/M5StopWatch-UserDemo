@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       build_toolchain:
-        description: 'Toolchain to build with'
+        description: 'Toolchain (auto CI always uses PlatformIO; pick esp-idf/all here to also verify native IDF)'
         required: true
-        default: 'all'
+        default: 'platformio'
         type: choice
         options:
           - 'all'
@@ -169,10 +169,16 @@ jobs:
             - **`recovery.bin` (Recovery 恢复固件专用)**:
               极简恢复固件（烧录至 `0x5A0000`）。
 
+  # ESP-IDF is a compatibility check only (releases come from PlatformIO).
+  # Auto push/PR never runs it; trigger manually via workflow_dispatch with esp-idf or all.
   build-esp-idf:
     name: Build (ESP-IDF v5.5)
     needs: [bump-version]
-    if: always() && (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.build_toolchain == 'all' || inputs.build_toolchain == 'esp-idf')
+    if: >
+      always() &&
+      (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped') &&
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.build_toolchain == 'all' || inputs.build_toolchain == 'esp-idf')
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5
     defaults:
