@@ -71,6 +71,8 @@ void Hal::pwr_button_tick()
     }
 
     // Long press (>= 2.0s): Power off / 关机
+    // Defer the actual shutdown to feedTheDog/powerOff so we never block while an
+    // app may be holding the LVGL lock, and so release-wait happens outside UI.
     if (btnPwr.pressedFor(2000)) {
         if (!shutdown_triggered) {
             shutdown_triggered = true;
@@ -81,14 +83,7 @@ void Hal::pwr_button_tick()
             if (config.vibrateEnabled) {
                 vibrate(200, 100);
             }
-
-            // Wait for user to release the button so it doesn't wake immediately
-            const uint32_t wait_start = millis();
-            while ((!gpio_get_level(BOOT_BUTTON_PIN) || pmic_get_pwr_btn_state()) && (millis() - wait_start < 2500)) {
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-
-            powerOff();
+            requestPowerOff();
         }
     } else {
         if (!btnPwr.isPressed()) {

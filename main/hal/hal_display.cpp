@@ -287,8 +287,8 @@ void Hal::setThemeMode(Hal::ThemeMode mode, bool saveToSettings)
         mclog::tagInfo(_tag, "theme mode saved to settings: {}", static_cast<int>(mode));
     }
 
+    // Caller must already hold the LVGL lock (non-recursive mutex).
     if (lv_is_initialized()) {
-        LvglLockGuard lock;
         uitk::lvgl_cpp::ScreenActive screen;
         screen.setBgColor(lv_color_hex(getTheme().background));
         lv_obj_invalidate(lv_screen_active());
@@ -438,9 +438,15 @@ void Hal::sleepScreen()
     }
     _screen_sleeping = true;
     stopLvglUpdate();
-    if (_display) {
-        _display->setBrightness(0);
-        _display->setSleep(true);
+    {
+        // Wait out any concurrent lv_timer_handler/flush before sleeping the
+        // panel; racing SPI with OLED power-down can freeze the UI while the
+        // green power LED keeps running on PMIC/USB power.
+        LvglDrainGuard drain;
+        if (_display) {
+            _display->setBrightness(0);
+            _display->setSleep(true);
+        }
     }
     if (_cst820) {
         _cst820->sleep();
@@ -530,9 +536,42 @@ Hal::TouchPoint Hal::getTouchPoint()
 #include <cstring>  // for memset
 #include <lvgl.h>
 #include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
+
+namespace {
+
+// Drain in-flight LVGL flushes before touching the panel. If the caller already
+// owns the LVGL mutex, skip re-locking (non-recursive) to avoid self-deadlock.
+class LvglDrainGuard {
+public:
+    LvglDrainGuard()
+    {
+        if (xGuiSemaphore == nullptr) {
+            return;
+        }
+        _locked_here = xSemaphoreGetMutexHolder(xGuiSemaphore) != xTaskGetCurrentTaskHandle();
+        if (_locked_here) {
+            GetHAL().lvglLock();
+        }
+    }
+
+    ~LvglDrainGuard()
+    {
+        if (_locked_here) {
+            GetHAL().lvglUnlock();
+        }
+    }
+
+private:
+    bool _locked_here = false;
+};
+
+}  // namespace
 
 #define LV_BUFFER_LINE 120
 

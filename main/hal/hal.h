@@ -18,6 +18,7 @@
 #include <string_view>
 #include <array>
 #include <mutex>
+#include <atomic>
 #include <M5GFX.h>
 
 /**
@@ -160,6 +161,8 @@ public:
     uint8_t getBatteryLevel();
     bool isBatteryCharging(bool strict = false);
     void setPowerLed(bool enabled);
+    void requestPowerOff();
+    bool isPowerOffRequested() const;
     void powerOff();
 
     /* --------------------------------- Display -------------------------------- */
@@ -387,6 +390,7 @@ private:
     ButtonConfig _btn_config;
     int _bl_brightness = 80;
     int _spk_volume    = 80;
+    std::atomic<bool> _poweroff_requested{false};
 
     void i2c_init();
     void i2c_detect();

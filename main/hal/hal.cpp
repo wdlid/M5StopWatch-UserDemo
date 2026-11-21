@@ -69,11 +69,20 @@ std::uint32_t Hal::millis()
 
 void Hal::feedTheDog()
 {
+    if (isPowerOffRequested()) {
+        powerOff();
+    }
+
     if (isScreenSleeping()) {
         updateButtonStates();
     } else {
         pwr_button_tick();
     }
+
+    if (isPowerOffRequested()) {
+        powerOff();
+    }
+
     wifi_tick();
     display_tick();
     eye_care_tick();

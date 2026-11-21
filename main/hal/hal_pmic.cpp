@@ -12,6 +12,9 @@
 #include <cmath>
 #include <esp_sleep.h>
 #include <atomic>
+#include <driver/gpio.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
@@ -153,14 +156,45 @@ bool Hal::pmic_get_double_click_flag()
     return false;
 }
 
+void Hal::requestPowerOff()
+{
+    _poweroff_requested.store(true, std::memory_order_release);
+}
+
+bool Hal::isPowerOffRequested() const
+{
+    return _poweroff_requested.load(std::memory_order_acquire);
+}
+
 void Hal::powerOff()
 {
+    if (_shutting_down.exchange(true)) {
+        return;
+    }
+
     mclog::tagInfo(_tag, "power off requested");
-    _shutting_down.store(true);
+    _poweroff_requested.store(true, std::memory_order_release);
+
+    // Kill the power LED and panel first so a partial/hung shutdown cannot leave
+    // a black screen with the green LED still flashing.
+    setPowerLed(false);
+
     vibrate(120, 100);
     delay(200);
     stopVibrate();
     sleepScreen();
+
+    // Must release before deep sleep: ext0 wakeup on GPIO0=low fires immediately
+    // if boot is still held, which looks like a hung/reboot-loop device while the
+    // PMIC LED can keep blinking on residual USB/battery power.
+    auto wait_for_power_buttons_released = [this]() {
+        while (!gpio_get_level(GPIO_NUM_0) || pmic_get_pwr_btn_state()) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    };
+    wait_for_power_buttons_released();
+
     ioe_power_off();
     if (_pm1) {
         _pm1->timerClear();
@@ -174,6 +208,8 @@ void Hal::powerOff()
         _pm1->shutdown();
         delay(300);
     }
+
+    wait_for_power_buttons_released();
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
     esp_deep_sleep_start();
 }

@@ -430,164 +430,167 @@ void CheckUpdateWorker::_startCheckTask()
     BaseType_t res   = xTaskCreate(
         [](void* arg) {
             auto* holder = static_cast<std::shared_ptr<CheckTaskContext>*>(arg);
-            std::shared_ptr<CheckTaskContext> ctx = std::move(*holder);
-            delete holder;
-
-            HttpRespBuf resp;
-            resp.abort_flag                 = &ctx->abort_requested;
-            esp_http_client_config_t config = {};
-            config.url                      = GITHUB_LATEST_URL;
-            config.method                   = HTTP_METHOD_GET;
-            config.crt_bundle_attach        = esp_crt_bundle_attach;
-            config.timeout_ms               = 6000;
-            config.buffer_size              = 4096;
-            config.buffer_size_tx           = 1024;
-            config.max_redirection_count    = 5;
-            config.event_handler            = http_event_cb;
-            config.user_data                = &resp;
-
-            esp_http_client_handle_t client = esp_http_client_init(&config);
-            if (!client) {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::CheckFailed;
-                ctx->info.errorMsg = "HTTP client init failed";
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
-            esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
-
-            esp_err_t err = esp_http_client_perform(client);
-            int status    = esp_http_client_get_status_code(client);
-            esp_http_client_cleanup(client);
-
-            // If /releases/latest returned 404 (e.g. only prereleases exist), fallback to /releases
-            if (err == ESP_OK && status == 404 && !ctx->abort_requested.load()) {
-                resp.body.clear();
-                config.url = GITHUB_RELEASES_URL;
-                client     = esp_http_client_init(&config);
-                if (client) {
-                    esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
-                    esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
-                    err    = esp_http_client_perform(client);
-                    status = esp_http_client_get_status_code(client);
-                    esp_http_client_cleanup(client);
-                }
-            }
-
-            if (ctx->abort_requested.load()) {
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            if (err != ESP_OK || status != 200 || resp.body.empty()) {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step = Step::CheckFailed;
-                char err_buf[64];
-                if (err != ESP_OK) {
-                    snprintf(err_buf, sizeof(err_buf), "Network error (%s)", esp_err_to_name(err));
-                } else {
-                    snprintf(err_buf, sizeof(err_buf), "Server error (HTTP %d)", status);
-                }
-                ctx->info.errorMsg = err_buf;
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            // Parse response JSON
-            JsonDocument doc;
-            DeserializationError d_err = deserializeJson(doc, resp.body);
-            if (d_err != DeserializationError::Ok) {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::CheckFailed;
-                ctx->info.errorMsg = "Failed to parse release info";
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            Version current_ver   = Version::parse(common::FirmwareVersion);
-            Version highest_found = current_ver;
-            std::string best_version;
-            std::string best_url;
-            size_t best_size = 0;
-
-            auto process_release = [&](JsonObject rel) {
-                const char* tag  = rel["tag_name"] | "";
-                const char* name = rel["name"] | "";
-
-                Version rel_ver = Version::parse(tag);
-                if (rel_ver <= current_ver && name[0] != '\0') {
-                    rel_ver = Version::parse(name);
-                }
-
-                if (rel_ver > highest_found) {
-                    JsonArray assets = rel["assets"].as<JsonArray>();
-                    std::string exact_url;
-                    size_t exact_size = 0;
-                    std::string fallback_url;
-                    size_t fallback_size = 0;
-
-                    for (JsonObject asset : assets) {
-                        const char* asset_name = asset["name"] | "";
-                        const char* asset_url  = asset["browser_download_url"] | "";
-                        size_t asset_size      = asset["size"] | 0;
-                        if (asset_url[0] == '\0') {
-                            continue;
-                        }
-
-                        if (strcmp(asset_name, "firmware-ota.bin") == 0 || strcmp(asset_name, "firmware.bin") == 0) {
-                            exact_url  = asset_url;
-                            exact_size = asset_size;
-                            break;
-                        }
-
-                        size_t name_len = strlen(asset_name);
-                        if (name_len > 4 && strcmp(asset_name + name_len - 4, ".bin") == 0 &&
-                            strcmp(asset_name, "bootloader.bin") != 0 && strcmp(asset_name, "partitions.bin") != 0 &&
-                            strcmp(asset_name, "ota_data_initial.bin") != 0 &&
-                            strstr(asset_name, "factory") == nullptr && fallback_url.empty()) {
-                            fallback_url  = asset_url;
-                            fallback_size = asset_size;
-                        }
-                    }
-
-                    const std::string& chosen_url = !exact_url.empty() ? exact_url : fallback_url;
-                    size_t chosen_size            = !exact_url.empty() ? exact_size : fallback_size;
-                    if (!chosen_url.empty()) {
-                        highest_found = rel_ver;
-                        best_version  = (tag[0] != '\0') ? tag : name;
-                        best_url      = chosen_url;
-                        best_size     = chosen_size;
-                    }
-                }
-            };
-
-            if (doc.is<JsonArray>()) {
-                for (JsonObject rel : doc.as<JsonArray>()) {
-                    process_release(rel);
-                }
-            } else if (doc.is<JsonObject>()) {
-                process_release(doc.as<JsonObject>());
-            }
-
             {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                if (highest_found > current_ver && !best_url.empty()) {
-                    ctx->result_step        = Step::UpdateAvailable;
-                    ctx->info.latestVersion = best_version;
-                    ctx->info.downloadUrl   = best_url;
-                    ctx->info.fileSize      = best_size;
-                } else {
-                    ctx->result_step = Step::UpToDate;
+                std::shared_ptr<CheckTaskContext> ctx = std::move(*holder);
+                delete holder;
+
+                HttpRespBuf resp;
+                resp.abort_flag                 = &ctx->abort_requested;
+                esp_http_client_config_t config = {};
+                config.url                      = GITHUB_LATEST_URL;
+                config.method                   = HTTP_METHOD_GET;
+                config.crt_bundle_attach        = esp_crt_bundle_attach;
+                config.timeout_ms               = 6000;
+                config.buffer_size              = 4096;
+                config.buffer_size_tx           = 1024;
+                config.max_redirection_count    = 5;
+                config.event_handler            = http_event_cb;
+                config.user_data                = &resp;
+
+                esp_http_client_handle_t client = esp_http_client_init(&config);
+                if (!client) {
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::CheckFailed;
+                        ctx->info.errorMsg = "HTTP client init failed";
+                        ctx->finished.store(true);
+                    }
+                    return;
+                }
+
+                esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
+                esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+
+                esp_err_t err = esp_http_client_perform(client);
+                int status    = esp_http_client_get_status_code(client);
+                esp_http_client_cleanup(client);
+
+                // If /releases/latest returned 404 (e.g. only prereleases exist), fallback to /releases
+                if (err == ESP_OK && status == 404 && !ctx->abort_requested.load()) {
+                    resp.body.clear();
+                    config.url = GITHUB_RELEASES_URL;
+                    client     = esp_http_client_init(&config);
+                    if (client) {
+                        esp_http_client_set_header(client, "User-Agent", "M5StopWatch");
+                        esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+                        err    = esp_http_client_perform(client);
+                        status = esp_http_client_get_status_code(client);
+                        esp_http_client_cleanup(client);
+                    }
+                }
+
+                if (ctx->abort_requested.load()) {
+                    ctx->finished.store(true);
+                    return;
+                }
+
+                if (err != ESP_OK || status != 200 || resp.body.empty()) {
+                    char err_buf[64];
+                    if (err != ESP_OK) {
+                        snprintf(err_buf, sizeof(err_buf), "Network error (%s)", esp_err_to_name(err));
+                    } else {
+                        snprintf(err_buf, sizeof(err_buf), "Server error (HTTP %d)", status);
+                    }
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::CheckFailed;
+                        ctx->info.errorMsg = err_buf;
+                        ctx->finished.store(true);
+                    }
+                    return;
+                }
+
+                // Parse response JSON
+                JsonDocument doc;
+                DeserializationError d_err = deserializeJson(doc, resp.body);
+                if (d_err != DeserializationError::Ok) {
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::CheckFailed;
+                        ctx->info.errorMsg = "Failed to parse release info";
+                        ctx->finished.store(true);
+                    }
+                    return;
+                }
+
+                Version current_ver   = Version::parse(common::FirmwareVersion);
+                Version highest_found = current_ver;
+                std::string best_version;
+                std::string best_url;
+                size_t best_size = 0;
+
+                auto process_release = [&](JsonObject rel) {
+                    const char* tag  = rel["tag_name"] | "";
+                    const char* name = rel["name"] | "";
+
+                    Version rel_ver = Version::parse(tag);
+                    if (rel_ver <= current_ver && name[0] != '\0') {
+                        rel_ver = Version::parse(name);
+                    }
+
+                    if (rel_ver > highest_found) {
+                        JsonArray assets = rel["assets"].as<JsonArray>();
+                        std::string exact_url;
+                        size_t exact_size = 0;
+                        std::string fallback_url;
+                        size_t fallback_size = 0;
+
+                        for (JsonObject asset : assets) {
+                            const char* asset_name = asset["name"] | "";
+                            const char* asset_url  = asset["browser_download_url"] | "";
+                            size_t asset_size      = asset["size"] | 0;
+                            if (asset_url[0] == '\0') {
+                                continue;
+                            }
+
+                            if (strcmp(asset_name, "firmware-ota.bin") == 0 || strcmp(asset_name, "firmware.bin") == 0) {
+                                exact_url  = asset_url;
+                                exact_size = asset_size;
+                                break;
+                            }
+
+                            size_t name_len = strlen(asset_name);
+                            if (name_len > 4 && strcmp(asset_name + name_len - 4, ".bin") == 0 &&
+                                strcmp(asset_name, "bootloader.bin") != 0 && strcmp(asset_name, "partitions.bin") != 0 &&
+                                strcmp(asset_name, "ota_data_initial.bin") != 0 &&
+                                strstr(asset_name, "factory") == nullptr && fallback_url.empty()) {
+                                fallback_url  = asset_url;
+                                fallback_size = asset_size;
+                            }
+                        }
+
+                        const std::string& chosen_url = !exact_url.empty() ? exact_url : fallback_url;
+                        size_t chosen_size            = !exact_url.empty() ? exact_size : fallback_size;
+                        if (!chosen_url.empty()) {
+                            highest_found = rel_ver;
+                            best_version  = (tag[0] != '\0') ? tag : name;
+                            best_url      = chosen_url;
+                            best_size     = chosen_size;
+                        }
+                    }
+                };
+
+                if (doc.is<JsonArray>()) {
+                    for (JsonObject rel : doc.as<JsonArray>()) {
+                        process_release(rel);
+                    }
+                } else if (doc.is<JsonObject>()) {
+                    process_release(doc.as<JsonObject>());
+                }
+
+                {
+                    std::lock_guard<std::mutex> lk(ctx->mutex);
+                    if (highest_found > current_ver && !best_url.empty()) {
+                        ctx->result_step        = Step::UpdateAvailable;
+                        ctx->info.latestVersion = best_version;
+                        ctx->info.downloadUrl   = best_url;
+                        ctx->info.fileSize      = best_size;
+                    } else {
+                        ctx->result_step = Step::UpToDate;
+                    }
+                    ctx->finished.store(true);
                 }
             }
-
-            ctx->finished.store(true);
             vTaskDelete(NULL);
         },
         "check_update_task", 16 * 1024, ctx_holder, 5, nullptr);
@@ -614,141 +617,146 @@ void CheckUpdateWorker::_startOtaTask()
     BaseType_t res   = xTaskCreate(
         [](void* arg) {
             auto* holder = static_cast<std::shared_ptr<OtaTaskContext>*>(arg);
-            std::shared_ptr<OtaTaskContext> ctx = std::move(*holder);
-            delete holder;
+            {
+                std::shared_ptr<OtaTaskContext> ctx = std::move(*holder);
+                delete holder;
 
-            const std::string& url     = ctx->download_url;
-            const size_t expected_size = ctx->expected_size;
+                const std::string& url     = ctx->download_url;
+                const size_t expected_size = ctx->expected_size;
 
-            mclog::tagInfo(_tag, "Starting HTTPS OTA download to storage: {}", url);
+                mclog::tagInfo(_tag, "Starting HTTPS OTA download to storage: {}", url);
 
-            constexpr const char* UPDATE_PATH = "/spiflash/update.bin";
-            FILE* f = fopen(UPDATE_PATH, "wb");
-            if (!f) {
-                mclog::tagError(_tag, "Failed to open {} for writing: {}", UPDATE_PATH, strerror(errno));
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "Storage write error";
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            HttpRespBuf resp;
-            resp.file          = f;
-            resp.expected_size = expected_size;
-            resp.abort_flag    = &ctx->abort_requested;
-            resp.on_progress   = [&ctx](size_t received, size_t total, int progress) {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->info.bytesReceived = received;
-                ctx->info.totalBytes    = total;
-                ctx->info.progress      = progress;
-            };
-
-            esp_http_client_config_t http_config = {};
-            http_config.url                      = url.c_str();
-            http_config.method                   = HTTP_METHOD_GET;
-            http_config.crt_bundle_attach        = esp_crt_bundle_attach;
-            http_config.timeout_ms               = 20000;
-            http_config.keep_alive_enable        = true;
-            http_config.buffer_size              = 8192;
-            http_config.buffer_size_tx           = 2048;
-            http_config.max_redirection_count    = 5;
-            http_config.user_agent               = "M5StopWatch";
-            http_config.event_handler            = http_event_cb;
-            http_config.user_data                = &resp;
-
-            esp_http_client_handle_t client = esp_http_client_init(&http_config);
-            if (!client) {
-                fclose(f);
-                remove(UPDATE_PATH);
-                mclog::tagError(_tag, "esp_http_client_init failed");
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step   = Step::UpdateFailed;
-                ctx->info.errorMsg = "HTTP client error";
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            esp_err_t err = esp_http_client_perform(client);
-            int status    = esp_http_client_get_status_code(client);
-
-            fclose(f);
-            esp_http_client_cleanup(client);
-
-            if (ctx->abort_requested.load()) {
-                mclog::tagWarn(_tag, "OTA aborted by user");
-                remove(UPDATE_PATH);
-                ctx->finished.store(true);
-                vTaskDelete(NULL);
-                return;
-            }
-
-            size_t read_total = resp.received_bytes;
-            mclog::tagInfo(_tag, "Download finished: err={}, status={}, bytes={}/{}", esp_err_to_name(err), status,
-                           read_total, resp.total_bytes);
-
-            if (err == ESP_OK && status == 200 && !resp.write_error && read_total > 100 * 1024 &&
-                (resp.total_bytes == 0 || read_total == resp.total_bytes)) {
-                // Verify magic byte (0xE9)
-                FILE* check_f = fopen(UPDATE_PATH, "rb");
-                uint8_t magic = 0;
-                if (check_f) {
-                    fread(&magic, 1, 1, check_f);
-                    fclose(check_f);
-                }
-                if (magic != 0xE9) {
-                    mclog::tagError(_tag, "Invalid firmware magic byte: 0x{:02X}", magic);
-                    remove(UPDATE_PATH);
-                    std::lock_guard<std::mutex> lk(ctx->mutex);
-                    ctx->result_step   = Step::UpdateFailed;
-                    ctx->info.errorMsg = "Invalid firmware file";
-                    ctx->finished.store(true);
-                    vTaskDelete(NULL);
+                constexpr const char* UPDATE_PATH = "/spiflash/update.bin";
+                FILE* f = fopen(UPDATE_PATH, "wb");
+                if (!f) {
+                    mclog::tagError(_tag, "Failed to open {} for writing: {}", UPDATE_PATH, strerror(errno));
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::UpdateFailed;
+                        ctx->info.errorMsg = "Storage write error";
+                        ctx->finished.store(true);
+                    }
                     return;
                 }
 
-                // Staged update successfully downloaded! Set boot partition to ota_1 (Recovery)
-                const esp_partition_t* ota_1 =
-                    esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
-                if (ota_1) {
-                    esp_err_t set_boot_err = esp_ota_set_boot_partition(ota_1);
-                    if (set_boot_err == ESP_OK) {
-                        mclog::tagInfo(_tag, "Update staged. Boot partition set to ota_1 (Recovery)");
-                        std::lock_guard<std::mutex> lk(ctx->mutex);
-                        ctx->result_step   = Step::UpdateSuccess;
-                        ctx->info.progress = 100;
-                        ctx->finished.store(true);
-                        vTaskDelete(NULL);
-                        return;
-                    } else {
-                        mclog::tagError(_tag, "Failed to set boot partition: {}", esp_err_to_name(set_boot_err));
-                    }
-                } else {
-                    mclog::tagError(_tag, "ota_1 partition not found");
-                }
-            }
+                HttpRespBuf resp;
+                resp.file          = f;
+                resp.expected_size = expected_size;
+                resp.abort_flag    = &ctx->abort_requested;
+                resp.on_progress   = [&ctx](size_t received, size_t total, int progress) {
+                    std::lock_guard<std::mutex> lk(ctx->mutex);
+                    ctx->info.bytesReceived = received;
+                    ctx->info.totalBytes    = total;
+                    ctx->info.progress      = progress;
+                };
 
-            remove(UPDATE_PATH);
-            {
-                std::lock_guard<std::mutex> lk(ctx->mutex);
-                ctx->result_step = Step::UpdateFailed;
-                if (resp.write_error) {
-                    ctx->info.errorMsg = "Storage write error";
-                } else if (err != ESP_OK) {
-                    char err_buf[64];
-                    snprintf(err_buf, sizeof(err_buf), "Download error (%s)", esp_err_to_name(err));
-                    ctx->info.errorMsg = err_buf;
-                } else if (status != 200) {
-                    char err_buf[64];
-                    snprintf(err_buf, sizeof(err_buf), "HTTP error (%d)", status);
-                    ctx->info.errorMsg = err_buf;
-                } else {
-                    ctx->info.errorMsg = "Download incomplete";
+                esp_http_client_config_t http_config = {};
+                http_config.url                      = url.c_str();
+                http_config.method                   = HTTP_METHOD_GET;
+                http_config.crt_bundle_attach        = esp_crt_bundle_attach;
+                http_config.timeout_ms               = 20000;
+                http_config.keep_alive_enable        = true;
+                http_config.buffer_size              = 8192;
+                http_config.buffer_size_tx           = 2048;
+                http_config.max_redirection_count    = 5;
+                http_config.user_agent               = "M5StopWatch";
+                http_config.event_handler            = http_event_cb;
+                http_config.user_data                = &resp;
+
+                esp_http_client_handle_t client = esp_http_client_init(&http_config);
+                if (!client) {
+                    fclose(f);
+                    remove(UPDATE_PATH);
+                    mclog::tagError(_tag, "esp_http_client_init failed");
+                    {
+                        std::lock_guard<std::mutex> lk(ctx->mutex);
+                        ctx->result_step   = Step::UpdateFailed;
+                        ctx->info.errorMsg = "HTTP client error";
+                        ctx->finished.store(true);
+                    }
+                    return;
+                }
+
+                esp_err_t err = esp_http_client_perform(client);
+                int status    = esp_http_client_get_status_code(client);
+
+                fclose(f);
+                esp_http_client_cleanup(client);
+
+                if (ctx->abort_requested.load()) {
+                    mclog::tagWarn(_tag, "OTA aborted by user");
+                    remove(UPDATE_PATH);
+                    ctx->finished.store(true);
+                    return;
+                }
+
+                size_t read_total = resp.received_bytes;
+                mclog::tagInfo(_tag, "Download finished: err={}, status={}, bytes={}/{}", esp_err_to_name(err), status,
+                               read_total, resp.total_bytes);
+
+                if (err == ESP_OK && status == 200 && !resp.write_error && read_total > 100 * 1024 &&
+                    (resp.total_bytes == 0 || read_total == resp.total_bytes)) {
+                    // Verify magic byte (0xE9)
+                    FILE* check_f = fopen(UPDATE_PATH, "rb");
+                    uint8_t magic = 0;
+                    if (check_f) {
+                        fread(&magic, 1, 1, check_f);
+                        fclose(check_f);
+                    }
+                    if (magic != 0xE9) {
+                        mclog::tagError(_tag, "Invalid firmware magic byte: 0x{:02X}", magic);
+                        remove(UPDATE_PATH);
+                        {
+                            std::lock_guard<std::mutex> lk(ctx->mutex);
+                            ctx->result_step   = Step::UpdateFailed;
+                            ctx->info.errorMsg = "Invalid firmware file";
+                            ctx->finished.store(true);
+                        }
+                        return;
+                    }
+
+                    // Staged update successfully downloaded! Set boot partition to ota_1 (Recovery)
+                    const esp_partition_t* ota_1 =
+                        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+                    if (ota_1) {
+                        esp_err_t set_boot_err = esp_ota_set_boot_partition(ota_1);
+                        if (set_boot_err == ESP_OK) {
+                            mclog::tagInfo(_tag, "Update staged. Boot partition set to ota_1 (Recovery)");
+                            {
+                                std::lock_guard<std::mutex> lk(ctx->mutex);
+                                ctx->result_step   = Step::UpdateSuccess;
+                                ctx->info.progress = 100;
+                                ctx->finished.store(true);
+                            }
+                            return;
+                        } else {
+                            mclog::tagError(_tag, "Failed to set boot partition: {}", esp_err_to_name(set_boot_err));
+                        }
+                    } else {
+                        mclog::tagError(_tag, "ota_1 partition not found");
+                    }
+                }
+
+                remove(UPDATE_PATH);
+                {
+                    std::lock_guard<std::mutex> lk(ctx->mutex);
+                    ctx->result_step = Step::UpdateFailed;
+                    if (resp.write_error) {
+                        ctx->info.errorMsg = "Storage write error";
+                    } else if (err != ESP_OK) {
+                        char err_buf[64];
+                        snprintf(err_buf, sizeof(err_buf), "Download error (%s)", esp_err_to_name(err));
+                        ctx->info.errorMsg = err_buf;
+                    } else if (status != 200) {
+                        char err_buf[64];
+                        snprintf(err_buf, sizeof(err_buf), "HTTP error (%d)", status);
+                        ctx->info.errorMsg = err_buf;
+                    } else {
+                        ctx->info.errorMsg = "Download incomplete";
+                    }
+                    ctx->finished.store(true);
                 }
             }
-            ctx->finished.store(true);
             vTaskDelete(NULL);
         },
         "ota_download_task", 16 * 1024, ctx_holder, 5, nullptr);
@@ -877,6 +885,7 @@ void CheckUpdateWorker::update()
     }
 
     case Step::Downloading: {
+        GetHAL().resetActivityTimer();
         _view->setProgress(info.progress, info.bytesReceived, info.totalBytes);
         break;
     }
