@@ -271,7 +271,12 @@ void GeminiLiveClient::setPttTalking(bool talking)
         GetHAL().resetActivityTimer();
         GetHAL().audioClearStream();
         // If server is still streaming the old turn, ignore any remaining in-flight audio until interrupted/turnComplete
-        _ignore_current_turn_audio = !_server_turn_finished.load();
+        if (!_server_turn_finished.load()) {
+            _ignore_current_turn_audio = true;
+            _ignore_audio_start_tick   = xTaskGetTickCount();
+        } else {
+            _ignore_current_turn_audio = false;
+        }
         _ptt_just_started          = true;
         _ptt_just_ended            = false;
         if (_setup_complete.load()) {
@@ -770,7 +775,6 @@ void GeminiLiveClient::taskLoop()
         if (_ptt_active.load() && _setup_complete.load()) {
             std::vector<int16_t> pcm16k;
             if (GetHAL().audioRecordStream16k(pcm16k, 60, 32.0f) && !pcm16k.empty()) {
-                _ignore_current_turn_audio = false;
                 const auto* raw_bytes      = reinterpret_cast<const uint8_t*>(pcm16k.data());
                 const std::size_t nbyte    = pcm16k.size() * sizeof(int16_t);
                 const bool is_google =
@@ -788,8 +792,14 @@ void GeminiLiveClient::taskLoop()
         }
 
         if (_ptt_just_ended.exchange(false) && _setup_complete.load()) {
-            _ignore_current_turn_audio = false;
             _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
+        }
+
+        // Fallback: reset ignore flag if 3s have elapsed since interruption without server turn completion
+        if (_ignore_current_turn_audio.load() && !_ptt_active.load()) {
+            if ((xTaskGetTickCount() - _ignore_audio_start_tick) * portTICK_PERIOD_MS > 3000) {
+                _ignore_current_turn_audio = false;
+            }
         }
 
         // Flow control backpressure:

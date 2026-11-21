@@ -98,6 +98,7 @@ private:
     std::atomic<bool> _setup_complete{false};
     std::atomic<bool> _server_turn_finished{true};
     std::atomic<bool> _ignore_current_turn_audio{false};
+    TickType_t _ignore_audio_start_tick    = 0;
     uint8_t _in_progress_continuation_count = 0;
 
     TaskHandle_t _task_handle = nullptr;

@@ -92,8 +92,8 @@ public:
         };
         _codec_dev = esp_codec_dev_new(&dev_cfg);
 
-        esp_codec_dev_set_in_gain(_codec_dev, 30.0);
-        _current_in_gain = 30.0f;
+        esp_codec_dev_set_in_gain(_codec_dev, 32.0);
+        _current_in_gain = 32.0f;
 
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
@@ -191,6 +191,15 @@ public:
         }
     }
 
+    void setOutputMute(bool mute)
+    {
+        std::lock_guard<std::mutex> lock(_ctrl_mutex);
+        if (_out_muted.load() != mute) {
+            _out_muted.store(mute);
+            esp_codec_dev_set_out_mute(_codec_dev, mute);
+        }
+    }
+
     bool isPlaying()
     {
         std::lock_guard<std::mutex> lock(_play_mutex);
@@ -204,6 +213,9 @@ public:
 
     void play(std::vector<int16_t>& data, bool async)
     {
+        if (_out_muted) {
+            setOutputMute(false);
+        }
         if (async) {
             {
                 std::lock_guard<std::mutex> lock(_play_mutex);
@@ -238,6 +250,10 @@ public:
         }
         if (GetHAL().isScreenSleeping()) {
             GetHAL().setSpeakerEnable(true);
+        }
+
+        if (_out_muted) {
+            setOutputMute(false);
         }
 
         // Resample from srcRate (e.g. 24000 Hz) to hardware sample_rate (44100 Hz) with continuous phase across chunks
@@ -365,6 +381,7 @@ public:
             _is_playing          = false;
             _audio_data.clear();
         }
+        setOutputMute(true);
         _current_rms.store(0.0f, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lock(_spectrum_frame_mutex);
@@ -518,8 +535,8 @@ private:
                 }
 
                 if (abort_requested) {
-                    i2s_channel_disable(_tx_handle);
-                    i2s_channel_enable(_tx_handle);
+                    // Drain hardware pipeline with silence without stopping the master I2S clock
+                    // (Disabling TX in duplex mode halts shared BCLK/WS, causing ES8311 frame desync and squeal)
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
                                         std::min<std::size_t>(_silence_buffer.size(), 512) * sizeof(int16_t));
                     was_streaming = false;
@@ -547,8 +564,6 @@ private:
                     }
 
                     if (interrupted) {
-                        i2s_channel_disable(_tx_handle);
-                        i2s_channel_enable(_tx_handle);
                         continue;
                     }
 
@@ -561,6 +576,9 @@ private:
                 }
 
                 if (popped > 0) {
+                    if (_out_muted.load()) {
+                        setOutputMute(false);
+                    }
                     was_streaming   = true;
                     last_stream_val = stream_chunk[popped - 1];
                     // Update RMS level for UI animation during playback
@@ -852,7 +870,8 @@ private:
     float _resample_pos                                                            = 0.0f;
     int16_t _prev_src_sample                                                       = 0;
     TickType_t _stream_prebuffer_start                                             = 0;
-    float _current_in_gain                                                         = 30.0f;
+    float _current_in_gain                                                         = 32.0f;
+    std::atomic<bool> _out_muted{false};
     std::atomic<float> _current_rms{0.0f};
     std::array<int16_t, spectrum_hop_size> _spectrum_pcm_hop                       = {};
     std::array<float, spectrum_fft_size> _spectrum_time_domain                     = {};
