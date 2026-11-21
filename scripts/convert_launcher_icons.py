@@ -2,7 +2,7 @@
 """Rasterize launcher SVGs in main/assets/images/src/ into LVGL RGB565A8 .c assets.
 
 Requires: rsvg-convert (librsvg2-bin), Pillow.
-Default output size: 128x128 (48 KB flash each). Launcher scales them to ~200px.
+Default output size: 200x200 (120 KB flash each), matching the launcher icon panel 1:1.
 """
 from __future__ import annotations
 
@@ -105,8 +105,10 @@ def write_c(name: str, w: int, h: int, rgba: bytes, out_dir: Path) -> int:
 
 
 def render_svg(svg_path: Path, size: int, pad_ratio: float) -> Image.Image:
+    """3x supersample then LANCZOS downscale for sharp edges at 1:1 display size."""
     text = svg_path.read_text(encoding="utf-8")
-    render_px = 512
+    box = max(1, int(size * (1.0 - 2 * pad_ratio)))
+    render_px = box * 3
     with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w", encoding="utf-8") as tf:
         tf.write(text)
         tmp_svg = Path(tf.name)
@@ -128,9 +130,8 @@ def render_svg(svg_path: Path, size: int, pad_ratio: float) -> Image.Image:
     tmp_svg.unlink(missing_ok=True)
     tmp_png.unlink(missing_ok=True)
 
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    box = int(size * (1.0 - 2 * pad_ratio))
     glyph.thumbnail((box, box), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     x = (size - glyph.width) // 2
     y = (size - glyph.height) // 2
     canvas.paste(glyph, (x, y), glyph)
@@ -139,8 +140,8 @@ def render_svg(svg_path: Path, size: int, pad_ratio: float) -> Image.Image:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--size", type=int, default=128)
-    parser.add_argument("--pad", type=float, default=0.08)
+    parser.add_argument("--size", type=int, default=200)
+    parser.add_argument("--pad", type=float, default=0.04)
     args = parser.parse_args()
 
     total = 0

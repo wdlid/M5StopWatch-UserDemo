@@ -296,12 +296,11 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
             }
             step_colors.push_back(color);
 
-            // Icon image (assets are 128x128 RGB565A8; scale to fill ~200px panel)
+            // Icon image (200x200 RGB565A8, 1:1 with panel — no upscale blur)
             if (props.info.icon != nullptr) {
                 _icon_images.push_back(std::make_unique<Image>(_icon_panels.back()->get()));
                 _icon_images.back()->setSrc(props.info.icon);
                 _icon_images.back()->setAlign(LV_ALIGN_CENTER);
-                _icon_images.back()->setScale(400);  // 256 = 100%, 400 ≈ 156% => ~200px
             }
 
             icon_x += _icon_gap;
