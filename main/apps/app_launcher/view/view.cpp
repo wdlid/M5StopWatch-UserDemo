@@ -6,8 +6,9 @@
 #include "view.h"
 #include <mooncake_log.h>
 #include <assets/assets.h>
-#include <functional>
 #include <hal/hal.h>
+#include <fmt/format.h>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -15,225 +16,69 @@ using namespace view;
 using namespace uitk;
 using namespace uitk::lvgl_cpp;
 
-/* -------------------------------------------------------------------------- */
-/*                               Page indicator                               */
-/* -------------------------------------------------------------------------- */
-class PageIndicator {
-public:
-    const int dot_size     = 8;
-    const int dot_size_big = 14;
-    const int dot_gap      = 16;
+static std::string _tag = "LauncherView";
 
-    void init(int pageNum, int pageGap, lv_obj_t* parent, int posX, int posY)
-    {
-        _page_num = pageNum;
-        _page_gap = pageGap;
+namespace {
 
-        _panel = std::make_unique<Container>(parent);
-        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-        _panel->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-        _panel->addFlag(LV_OBJ_FLAG_FLOATING);
-        _panel->setAlign(LV_ALIGN_CENTER);
-        _panel->setPadding(0, 0, 24, 24);
-        _panel->setPos(posX, posY);
-        _panel->setBorderWidth(0);
-        _panel->setHeight(24);
-        _panel->setWidth((pageNum * dot_size) + (pageNum - 1) * (dot_gap - dot_size) + 24 * 2);
-        _panel->setBgOpa(0);
-
-        for (int i = 0; i < pageNum; i++) {
-            _dots.push_back(std::make_unique<Container>(_panel->get()));
-            _dots.back()->setAlign(LV_ALIGN_CENTER);
-            _dots.back()->setPos(i * dot_gap - (pageNum - 1) * dot_gap / 2, 0);
-            _dots.back()->setBgColor(lv_color_hex(GetHAL().getTheme().textPrimary));
-            _dots.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-            _dots.back()->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-            _dots.back()->setRadius(LV_RADIUS_CIRCLE);
-            _dots.back()->setSize(dot_size, dot_size);
-            _dots.back()->setBorderWidth(0);
-        }
-
-        jumpTo(0);
-    }
-
-    void jumpTo(int index)
-    {
-        if (index < 0 || index >= _page_num) {
-            return;
-        }
-        _current_index = index;
-        _last_index    = index;
-        update_dots();
-    }
-
-    void update(int scrollValue)
-    {
-        _last_index = _current_index;
-
-        // Calculate absolute index
-        int abs_index = (scrollValue + _page_gap / 2) / _page_gap;
-
-        // Map to 0 ~ N-1
-        _current_index = abs_index % _page_num;
-        if (_current_index < 0) {
-            _current_index += _page_num;
-        }
-
-        if (_last_index != _current_index) {
-            update_dots();
-        }
-    }
-
-private:
-    int _page_num = 0;
-    int _page_gap = 0;
-
-    int _current_index = 0;
-    int _last_index    = 0;
-
-    std::unique_ptr<Container> _panel;
-    std::vector<std::unique_ptr<Container>> _dots;
-
-    void update_dots()
-    {
-        for (int i = 0; i < _page_num; i++) {
-            if (i == _current_index) {
-                _dots[i]->setSize(dot_size_big, dot_size_big);
-                _dots[i]->setOpa(255);
-            } else {
-                _dots[i]->setSize(dot_size, dot_size);
-                _dots[i]->setOpa(128);
-            }
-        }
-    }
+// Soft pastel icon badge colors inspired by the reference UI
+constexpr std::array<uint32_t, 9> _pastel_badge_colors = {
+    0xE4F1E8,  // Soft mint
+    0xF9E9DC,  // Soft peach/terracotta
+    0xE5EEF8,  // Soft sky blue
+    0xECE6F6,  // Soft lavender
+    0xF7ECDF,  // Soft sand
+    0xE3F0EA,  // Soft sage
+    0xFAE6E3,  // Soft coral
+    0xEDF2DF,  // Soft olive
+    0xEAE6DF,  // Soft warm stone
 };
 
-/* -------------------------------------------------------------------------- */
-/*                             Dynamic icon label                             */
-/* -------------------------------------------------------------------------- */
-class DynamicIconLabel {
-public:
-    const int show_range      = 150;
-    const int pos_y           = 155;
-    const int transition_zone = 80;
-
-    void init(const std::vector<std::string>& iconLabelTexts, int iconGap, lv_obj_t* parent)
-    {
-        _icon_label_texts = iconLabelTexts;
-        _icon_gap         = iconGap;
-
-        // Create floating label
-        _label = std::make_unique<Label>(parent);
-        _label->setTextColor(lv_color_hex(GetHAL().getTheme().textPrimary));
-        _label->setTextFont(&MontserratSemiBold26);
-        _label->setAlign(LV_ALIGN_CENTER);
-        _label->addFlag(LV_OBJ_FLAG_FLOATING);
-        _label->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-        _label->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-        _label->setOpa(255);
-
-        jumpTo(0);
+const char* wifi_status_text(Hal::WifiMode mode)
+{
+    switch (mode) {
+    case Hal::WifiMode::Connected:
+        return "Connected";
+    case Hal::WifiMode::Connecting:
+        return "Connecting";
+    case Hal::WifiMode::ConfigAp:
+    case Hal::WifiMode::BadgeAp:
+        return "AP Mode";
+    case Hal::WifiMode::Off:
+    case Hal::WifiMode::Error:
+    default:
+        return "Offline";
     }
+}
 
-    void jumpTo(int index)
-    {
-        if (index < 0 || index >= _icon_label_texts.size()) {
-            return;
-        }
-
-        _current_index = index;
-        _last_index    = index;
-
-        // Update label
-        _label->setText(_icon_label_texts[index]);
-        _label->setPos(0, pos_y);
-    }
-
-    void update(int scrollValue)
-    {
-        _last_index = _current_index;
-
-        // Calculate current icon index and distance to icon center
-        _current_index        = (scrollValue + _icon_gap / 2) / _icon_gap;
-        int icon_center_pos_x = _current_index * _icon_gap;
-        int distance_to_icon  = std::abs(scrollValue - icon_center_pos_x);
-
-        // Clamp index
-        if (_current_index < 0) {
-            _current_index = 0;
-        }
-        if (_current_index >= _icon_label_texts.size()) {
-            _current_index = _icon_label_texts.size() - 1;
-        }
-
-        // Check if label should be visible
-        bool should_be_visible = (distance_to_icon <= show_range);
-
-        // If index changed, update label text
-        if (_last_index != _current_index) {
-            _label->setText(_icon_label_texts[_current_index]);
-        }
-
-        // Update opacity based on distance when in transition zone
-        lv_opa_t target_opa = 0;
-        if (should_be_visible && distance_to_icon > (show_range - transition_zone)) {
-            // Fade out as approaching edge
-            float fade_ratio = 1.0f - (float)(distance_to_icon - (show_range - transition_zone)) / transition_zone;
-            target_opa       = static_cast<lv_opa_t>(static_cast<int>(255 * fade_ratio) & ~3);
-        } else if (should_be_visible) {
-            target_opa = 255;
-        }
-
-        if (_last_opa != target_opa) {
-            _last_opa = target_opa;
-            _label->setOpa(target_opa);
-        }
-    }
-
-private:
-    std::vector<std::string> _icon_label_texts;
-    int _icon_gap      = 0;
-    int _current_index = 0;
-    int _last_index    = 0;
-    lv_opa_t _last_opa = 255;
-
-    std::unique_ptr<Label> _label;
-};
-
-static std::string _tag        = "LauncherView";
-static constexpr int _icon_gap = 466;
-// Create 3 copies: [0:LeftBuffer] [1:Main] [2:RightBuffer]
-static constexpr int _loop_copies       = 3;
-static constexpr int _center_copy_index = 1;
-
-static int _last_clicked_icon_pos_x = -1;
-static std::unique_ptr<PageIndicator> _page_indicator;
-static std::unique_ptr<DynamicIconLabel> _dynamic_icon_label;
+}  // namespace
 
 LauncherView::~LauncherView()
 {
-    if (GetHAL().lvTouchpad) {
-        lv_indev_set_scroll_limit(GetHAL().lvTouchpad, 10);
-    }
-    _clock.reset();
+    _key_manager.reset();
+    _app_labels.clear();
     _icon_images.clear();
-    _icon_panels.clear();
-    _lr_indicators_images.clear();
-    _lr_indicator_panels.clear();
+    _icon_badges.clear();
+    _app_cards.clear();
+    _grid_panel.reset();
+    _bat_label.reset();
+    _bat_lightning.reset();
+    _bat_tip.reset();
+    _bat_bar.reset();
+    _time_label.reset();
+    _wifi_label.reset();
+    _wifi_icon.reset();
+    _drag_handle.reset();
+    _status_bar.reset();
     _panel.reset();
-    _page_indicator.reset();
-    _dynamic_icon_label.reset();
 }
 
-void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
+void LauncherView::init(std::vector<mooncake::AppProps_t> appProps)
 {
-    mclog::tagInfo(_tag, "init");
+    mclog::tagInfo(_tag, "init ({} apps)", appProps.size());
 
     _key_manager = std::make_unique<input::KeyManager>();
-
-    if (GetHAL().lvTouchpad) {
-        lv_indev_set_scroll_limit(GetHAL().lvTouchpad, 6);
-    }
+    const auto& theme = GetHAL().getTheme();
+    const bool is_light = (GetHAL().getThemeMode() == Hal::ThemeMode::Light);
 
     /* ------------------------------ Screen setup ------------------------------ */
     ScreenActive screen;
@@ -245,177 +90,189 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _panel->setSize(466, 466);
     _panel->setRadius(0);
     _panel->setBorderWidth(0);
-    _panel->setScrollDir(LV_DIR_HOR);
-    _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-    _panel->setBgColor(lv_color_hex(GetHAL().getTheme().background));
-    _panel->addFlag(LV_OBJ_FLAG_SCROLL_ONE);
-    _panel->removeFlag(LV_OBJ_FLAG_SCROLL_ELASTIC);
     _panel->setPaddingAll(0);
-    lv_obj_set_scroll_snap_x(_panel->get(), LV_SCROLL_SNAP_CENTER);
+    _panel->setBgColor(lv_color_hex(theme.background));
+    _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
-    /* ---------------------------------- Icons --------------------------------- */
-    int icon_x = 0;
-    int icon_y = -15;
-    std::vector<std::string> icon_label_texts;
-    std::vector<uint32_t> step_colors;
+    /* ---------------------------- Top drag handle ----------------------------- */
+    _drag_handle = std::make_unique<Container>(_panel->get());
+    _drag_handle->setSize(34, 4);
+    _drag_handle->align(LV_ALIGN_TOP_MID, 0, 12);
+    _drag_handle->setRadius(2);
+    _drag_handle->setBorderWidth(0);
+    _drag_handle->setBgColor(lv_color_hex(theme.textMuted));
+    _drag_handle->setBgOpa(LV_OPA_COVER);
+    _drag_handle->removeFlag(LV_OBJ_FLAG_CLICKABLE);
 
-    // Loop multiple times to create fake infinite scroll
-    for (int loop = 0; loop < _loop_copies; loop++) {
-        for (const auto& props : appPorps) {
-            // Icon panel
-            _icon_panels.push_back(std::make_unique<Container>(_panel->get()));
-            _icon_panels.back()->setAlign(LV_ALIGN_CENTER);
-            _icon_panels.back()->setSize(200, 200);
-            _icon_panels.back()->setPos(icon_x, icon_y);
-            _icon_panels.back()->setBorderWidth(0);
-            _icon_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-            _icon_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
-            _icon_panels.back()->setBgOpa(0);
+    /* --------------------------- Direct Status Bar ---------------------------- */
+    _status_bar = std::make_unique<Container>(_panel->get());
+    _status_bar->setSize(290, 36);
+    _status_bar->align(LV_ALIGN_TOP_MID, 0, 24);
+    _status_bar->setBgOpa(0);
+    _status_bar->setBorderWidth(0);
+    _status_bar->setPaddingAll(0);
+    _status_bar->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    _status_bar->onClick().connect([this]() {
+        if (onStatusBarClicked) {
+            onStatusBarClicked();
+        }
+    });
 
-            // Icon click callback
-            auto app_id = props.appID;
-            _icon_panels.back()->onClick().connect([this, app_id]() {
-                if (lv_obj_is_scrolling(_panel->get())) {
+    // Left: Wi-Fi icon + status
+    _wifi_icon = std::make_unique<Label>(_status_bar->get());
+    _wifi_icon->setText(LV_SYMBOL_WIFI);
+    _wifi_icon->setTextFont(&lv_font_montserrat_14);
+    _wifi_icon->setTextColor(lv_color_hex(theme.statusBarPrimary));
+    _wifi_icon->align(LV_ALIGN_LEFT_MID, 4, 0);
+
+    _wifi_label = std::make_unique<Label>(_status_bar->get());
+    _wifi_label->setText("Offline");
+    _wifi_label->setTextFont(&lv_font_montserrat_14);
+    _wifi_label->setTextColor(lv_color_hex(theme.textSecondary));
+    _wifi_label->align(LV_ALIGN_LEFT_MID, 24, 0);
+
+    // Center: Time HH:MM
+    _time_label = std::make_unique<Label>(_status_bar->get());
+    _time_label->setText("00:00");
+    _time_label->setTextFont(&lv_font_montserrat_18);
+    _time_label->setTextColor(lv_color_hex(theme.textPrimary));
+    _time_label->align(LV_ALIGN_CENTER, 0, 0);
+
+    // Right: Battery icon + percentage
+    _bat_label = std::make_unique<Label>(_status_bar->get());
+    _bat_label->setText("100%");
+    _bat_label->setTextFont(&lv_font_montserrat_14);
+    _bat_label->setTextColor(lv_color_hex(theme.statusBarPrimary));
+    _bat_label->align(LV_ALIGN_RIGHT_MID, -4, 0);
+
+    _bat_bar = std::make_unique<Bar>(_status_bar->get());
+    _bat_bar->setSize(24, 11);
+    _bat_bar->align(LV_ALIGN_RIGHT_MID, -46, 0);
+    _bat_bar->setRadius(3);
+    _bat_bar->setRadius(2, LV_PART_INDICATOR);
+    _bat_bar->setBgColor(lv_color_hex(theme.background));
+    _bat_bar->setBgColor(lv_color_hex(0x2D6A4F), LV_PART_INDICATOR);
+    _bat_bar->setBgOpa(LV_OPA_COVER);
+    _bat_bar->setRange(0, 100);
+    _bat_bar->setValue(80);
+    _bat_bar->setPadding(1, 1, 1, 1);
+    _bat_bar->setOutlineWidth(1);
+    _bat_bar->setOutlineColor(lv_color_hex(theme.statusBarPrimary));
+
+    _bat_tip = std::make_unique<Container>(_status_bar->get());
+    _bat_tip->setSize(3, 5);
+    _bat_tip->setRadius(1);
+    _bat_tip->setBorderWidth(0);
+    _bat_tip->setBgColor(lv_color_hex(theme.statusBarPrimary));
+    _bat_tip->setBgOpa(LV_OPA_COVER);
+    lv_obj_align_to(_bat_tip->get(), _bat_bar->get(), LV_ALIGN_OUT_RIGHT_MID, 1, 0);
+
+    _bat_lightning = std::make_unique<Image>(_status_bar->get());
+    _bat_lightning->setSrc(&icon_bat_lightning);
+    _bat_lightning->setImageRecolor(lv_color_hex(theme.statusBarPrimary));
+    _bat_lightning->setImageRecolorOpa(LV_OPA_COVER);
+    _bat_lightning->setHidden(true);
+    lv_obj_align_to(_bat_lightning->get(), _bat_bar->get(), LV_ALIGN_CENTER, 0, 0);
+
+    update_status_info();
+    _last_status_tick = GetHAL().millis();
+
+    /* ----------------------------- 2-Column Grid ------------------------------ */
+    _grid_panel = std::make_unique<Container>(_panel->get());
+    _grid_panel->setSize(466, 376);
+    _grid_panel->align(LV_ALIGN_TOP_MID, 0, 68);
+    _grid_panel->setBgOpa(0);
+    _grid_panel->setBorderWidth(0);
+    _grid_panel->setPaddingAll(0);
+    _grid_panel->setScrollDir(LV_DIR_VER);
+    _grid_panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
+
+    constexpr int card_w      = 158;
+    constexpr int card_h      = 54;
+    constexpr int col_gap     = 12;
+    constexpr int row_gap     = 10;
+    constexpr int top_margin  = 6;
+    constexpr int last_card_w = 176;
+
+    const size_t total = appProps.size();
+    const bool has_odd_last = (total % 2 == 1);
+
+    for (size_t i = 0; i < total; i++) {
+        const auto& props = appProps[i];
+        const size_t row  = i / 2;
+        const size_t col  = i % 2;
+        const bool is_centered_last = (has_odd_last && i == total - 1);
+
+        int w = is_centered_last ? last_card_w : card_w;
+        int x = is_centered_last ? 0 : (col == 0 ? -(card_w / 2 + col_gap / 2) : (card_w / 2 + col_gap / 2));
+        int y = top_margin + static_cast<int>(row) * (card_h + row_gap);
+
+        auto card = std::make_unique<Container>(_grid_panel->get());
+        card->setSize(w, card_h);
+        card->align(LV_ALIGN_TOP_MID, x, y);
+        card->setRadius(16);
+        card->setBgColor(lv_color_hex(theme.cardBackground));
+        card->setBgOpa(LV_OPA_COVER);
+        card->setBorderWidth(1);
+        card->setBorderColor(lv_color_hex(theme.border));
+        card->setPaddingAll(0);
+        card->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        card->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+        lv_obj_set_style_bg_color(card->get(), lv_color_hex(theme.cardPressed), LV_STATE_PRESSED);
+
+        auto app_id = props.appID;
+        card->onClick().connect([this, app_id]() {
+            if (lv_obj_is_scrolling(_grid_panel->get())) {
+                return;
+            }
+            if (auto* indev = lv_indev_active()) {
+                if (lv_indev_get_scroll_obj(indev) != nullptr) {
                     return;
                 }
-                if (auto* indev = lv_indev_active()) {
-                    if (lv_indev_get_scroll_obj(indev) != nullptr) {
-                        return;
-                    }
-                }
-                _clicked_app_id          = app_id;
-                _last_clicked_icon_pos_x = _panel->getScrollX();
-            });
-
-            // Keep track of data for helpers
-            icon_label_texts.push_back(props.info.name);
-
-            uint32_t color = 0xDADADA;
-            if (props.info.userData != nullptr) {
-                color = *(uint32_t*)props.info.userData;
             }
-            step_colors.push_back(color);
+            _clicked_app_id = app_id;
+        });
 
-            // Icon image (200x200 RGB565A8, 1:1 with panel — no upscale blur)
-            if (props.info.icon != nullptr) {
-                _icon_images.push_back(std::make_unique<Image>(_icon_panels.back()->get()));
-                _icon_images.back()->setSrc(props.info.icon);
-                _icon_images.back()->setAlign(LV_ALIGN_CENTER);
-            }
+        // Icon badge on left
+        uint32_t badge_bg = is_light ? _pastel_badge_colors[i % _pastel_badge_colors.size()] : theme.cardPressed;
+        auto badge        = std::make_unique<Container>(card->get());
+        badge->setSize(34, 34);
+        badge->align(LV_ALIGN_LEFT_MID, 10, 0);
+        badge->setRadius(10);
+        badge->setBgColor(lv_color_hex(badge_bg));
+        badge->setBgOpa(LV_OPA_COVER);
+        badge->setBorderWidth(0);
+        badge->setPaddingAll(0);
+        badge->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        badge->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_clip_corner(badge->get(), true, 0);
 
-            icon_x += _icon_gap;
+        if (props.info.icon != nullptr) {
+            auto img = std::make_unique<Image>(badge->get());
+            img->setSrc(props.info.icon);
+            img->align(LV_ALIGN_CENTER, 0, 0);
+            lv_image_set_scale(img->get(), 40);  // 200px * 40 / 256 ≈ 31px
+            lv_image_set_antialias(img->get(), true);
+            img->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+            _icon_images.push_back(std::move(img));
         }
+
+        // App name on right
+        auto label = std::make_unique<Label>(card->get());
+        label->setText(props.info.name);
+        label->setTextFont(&lv_font_montserrat_14);
+        label->setTextColor(lv_color_hex(theme.textPrimary));
+        label->setWidth(w - 56);
+        lv_label_set_long_mode(label->get(), LV_LABEL_LONG_DOT);
+        label->align(LV_ALIGN_LEFT_MID, 50, 0);
+        label->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        _icon_badges.push_back(std::move(badge));
+        _app_labels.push_back(std::move(label));
+        _app_cards.push_back(std::move(card));
     }
 
-    /* ------------------------------ LR indicators ----------------------------- */
-    // Go left indicator
-    _lr_indicator_panels.push_back(std::make_unique<Container>(_panel->get()));
-    _lr_indicator_panels.back()->setAlign(LV_ALIGN_CENTER);
-    _lr_indicator_panels.back()->setSize(52, 160);
-    _lr_indicator_panels.back()->setPos(-200, 0);
-    _lr_indicator_panels.back()->setBorderWidth(0);
-    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_FLOATING);
-    _lr_indicator_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
-    _lr_indicator_panels.back()->setBgOpa(0);
-    _lr_indicator_panels.back()->onClick().connect([this]() {
-        if (!lv_obj_is_scrolling(_panel->get())) {
-            scroll_to_nearby_icon(-1);
-        }
-    });
-
-    _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
-    _lr_indicators_images.back()->setSrc(&icon_indicator_left);
-    _lr_indicators_images.back()->align(LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_image_recolor(_lr_indicators_images.back()->get(), lv_color_hex(GetHAL().getTheme().textPrimary), 0);
-    lv_obj_set_style_image_recolor_opa(_lr_indicators_images.back()->get(), LV_OPA_COVER, 0);
-
-    // Go right indicator
-    _lr_indicator_panels.push_back(std::make_unique<Container>(_panel->get()));
-    _lr_indicator_panels.back()->setAlign(LV_ALIGN_CENTER);
-    _lr_indicator_panels.back()->setSize(52, 160);
-    _lr_indicator_panels.back()->setPos(200, 0);
-    _lr_indicator_panels.back()->setBorderWidth(0);
-    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_FLOATING);
-    _lr_indicator_panels.back()->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _lr_indicator_panels.back()->addFlag(LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
-    _lr_indicator_panels.back()->setBgOpa(0);
-    _lr_indicator_panels.back()->onClick().connect([this]() {
-        if (!lv_obj_is_scrolling(_panel->get())) {
-            scroll_to_nearby_icon(1);
-        }
-    });
-
-    _lr_indicators_images.push_back(std::make_unique<Image>(_lr_indicator_panels.back()->get()));
-    _lr_indicators_images.back()->setSrc(&icon_indicator_right);
-    _lr_indicators_images.back()->align(LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_image_recolor(_lr_indicators_images.back()->get(), lv_color_hex(GetHAL().getTheme().textPrimary), 0);
-    lv_obj_set_style_image_recolor_opa(_lr_indicators_images.back()->get(), LV_OPA_COVER, 0);
-
-    /* ------------------------------ Page indicator ---------------------------- */
-    _page_indicator = std::make_unique<PageIndicator>();
-    _page_indicator->init(appPorps.size(), _icon_gap, lv_screen_active(), 0, 200);
-
-    /* --------------------------- Dynamic icon label --------------------------- */
-    _dynamic_icon_label = std::make_unique<DynamicIconLabel>();
-    _dynamic_icon_label->init(icon_label_texts, _icon_gap, lv_screen_active());
-
-    /* ---------------------------------- Clock --------------------------------- */
-    _clock = std::make_unique<view::ArcTopClock>(lv_screen_active());
-    _clock->color = GetHAL().getTheme().textPrimary;
-    _clock->showFullDate = true;
-    _clock->init();
-    _clock->align(LV_ALIGN_CENTER, 0, 0);
-    _clock->addFlag(LV_OBJ_FLAG_FLOATING);
-
-    /* ----------------------------- History restore ---------------------------- */
-    bool need_restore      = false;
-    int restore_icon_pos_x = -1;
-
-    // Normal start pos (Center of the repeated sets)
-    int base_offset_rounds = _center_copy_index * appPorps.size();
-    int default_start_x    = base_offset_rounds * _icon_gap;
-
-    // // If warm boot was requested
-    // if (GetHAL().getWarmRebootTarget() >= 0) {
-    //     auto app_index = GetHAL().getWarmRebootTarget();
-    //     mclog::tagInfo(_tag, "warm boot was requested, app index: {}", app_index);
-    //     app_index = uitk::clamp(app_index, 0, static_cast<int>(appPorps.size()) - 1);
-
-    //     // Restore to center set
-    //     restore_icon_pos_x = (base_offset_rounds + app_index) * _icon_gap;
-    //     need_restore       = true;
-    //     GetHAL().clearWarmRebootRequest();
-    // }
-
-    if (_last_clicked_icon_pos_x != -1) {
-        int app_count = static_cast<int>(appPorps.size());
-        if (app_count > 0) {
-            int app_index = ((_last_clicked_icon_pos_x + _icon_gap / 2) / _icon_gap) % app_count;
-            if (app_index < 0) {
-                app_index += app_count;
-            }
-            restore_icon_pos_x = (base_offset_rounds + app_index) * _icon_gap;
-        } else {
-            restore_icon_pos_x = default_start_x;
-        }
-        need_restore             = true;
-        _last_clicked_icon_pos_x = -1;
-    } else {
-        restore_icon_pos_x = default_start_x;
-        need_restore       = true;
-    }
-
-    if (need_restore) {
-        _panel->scrollBy(-restore_icon_pos_x, 0, LV_ANIM_OFF);
-
-        _page_indicator->jumpTo((restore_icon_pos_x / _icon_gap) % appPorps.size());
-        _dynamic_icon_label->jumpTo(restore_icon_pos_x / _icon_gap);
-
-        _state = STATE_NORMAL;
-    }
-
-    // Destory boot logo label
+    // Destroy boot logo label
     GetHAL().bootLogo.reset();
 }
 
@@ -423,49 +280,21 @@ void LauncherView::update()
 {
     if (_key_manager) {
         switch (_key_manager->update()) {
-            case input::KeyEvent::GoPrevious:
-                scroll_to_nearby_icon(-1);
-                break;
-            case input::KeyEvent::GoNext:
-                scroll_to_nearby_icon(1);
-                break;
-            default:
-                break;
-        }
-    }
-
-    switch (_state) {
-        case STATE_STARTUP:
-            handle_state_startup();
+        case input::KeyEvent::GoPrevious:
+            if (_grid_panel) {
+                _grid_panel->scrollBy(0, 64, LV_ANIM_ON);
+            }
             break;
-        case STATE_NORMAL:
-            handle_state_normal();
+        case input::KeyEvent::GoNext:
+            if (_grid_panel) {
+                _grid_panel->scrollBy(0, -64, LV_ANIM_ON);
+            }
             break;
         default:
             break;
+        }
     }
-}
 
-void LauncherView::scroll_to_nearby_icon(int direction)
-{
-    handle_scroll_in_loop(true);
-
-    auto current_scroll_x = _panel->getScrollX();
-    int current_index     = (current_scroll_x + _icon_gap / 2) / _icon_gap;
-    int target_index      = current_index + direction;
-
-    int target_x        = target_index * _icon_gap;
-    int scroll_distance = target_x - current_scroll_x;
-    _panel->scrollBy(-scroll_distance, 0, LV_ANIM_ON);
-}
-
-void LauncherView::handle_state_startup()
-{
-    _state = STATE_NORMAL;
-}
-
-void LauncherView::handle_state_normal()
-{
     if (_clicked_app_id != -1) {
         if (onAppClicked) {
             onAppClicked(_clicked_app_id);
@@ -473,60 +302,39 @@ void LauncherView::handle_state_normal()
         _clicked_app_id = -1;
     }
 
-    handle_scroll_in_loop();
-
-    int scroll_x = _panel->getScrollX();
-    // mclog::tagInfo(_tag, "scroll x: {}", scroll_x);
-
-    if (scroll_x != _last_scroll_x) {
-        _last_scroll_x = scroll_x;
-        _page_indicator->update(scroll_x);
-        _dynamic_icon_label->update(scroll_x);
-    }
-
-    if (_clock) {
-        _clock->update();
+    uint32_t now = GetHAL().millis();
+    if (now - _last_status_tick >= 1000) {
+        _last_status_tick = now;
+        update_status_info();
     }
 }
 
-void LauncherView::handle_scroll_in_loop(bool force)
+void LauncherView::update_status_info()
 {
-    // We get total size from underlying icons count / copies
-    int total_icons   = _icon_panels.size();
-    int icons_per_set = total_icons / _loop_copies;
-    int set_width_px  = icons_per_set * _icon_gap;
-
-    // Check boundaries
-    // If we are in Copy 0, jump to Copy 1
-    // If we are in Copy 2, jump to Copy 1
-    // Copy Index: 0 [1] 2
-
-    int current_scroll_x = _panel->getScrollX();
-
-    // Thresholds: boundaries of center set (Set 1)
-    int left_trigger_limit  = 1 * set_width_px;
-    int right_trigger_limit = 2 * set_width_px - _icon_gap;
-
-    // Never teleport while LVGL is actively scrolling or while touch is pressed;
-    // altering scroll coordinates mid-gesture corrupts LVGL's scroll_area limits and throw momentum.
-    if (!force) {
-        if (lv_obj_is_scrolling(_panel->get())) {
-            return;
-        }
-        if (auto* indev = GetHAL().lvTouchpad) {
-            if (lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
-                return;
-            }
-        }
+    const auto wifi_status = GetHAL().getWifiStatus();
+    if (_wifi_icon) {
+        bool dim = (wifi_status.mode == Hal::WifiMode::Off || wifi_status.mode == Hal::WifiMode::Error);
+        _wifi_icon->setOpa(dim ? LV_OPA_40 : LV_OPA_COVER);
+    }
+    if (_wifi_label) {
+        _wifi_label->setText(wifi_status_text(wifi_status.mode));
     }
 
-    if (current_scroll_x < left_trigger_limit) {
-        // Too far left (Set 0), warp right to Set 1
-        // scrollBy(-val) increases scroll_x
-        _panel->scrollBy(-set_width_px, 0, LV_ANIM_OFF);
-    } else if (current_scroll_x > right_trigger_limit) {
-        // Too far right (Set 2), warp left to Set 1
-        // scrollBy(+val) decreases scroll_x
-        _panel->scrollBy(set_width_px, 0, LV_ANIM_OFF);
+    const auto t = GetHAL().getTimeHms();
+    if (_time_label) {
+        _time_label->setText(fmt::format("{:02d}:{:02d}", t.hour, t.minute));
+    }
+
+    const uint8_t bat_level = GetHAL().getBatteryLevel();
+    const bool charging     = GetHAL().isBatteryCharging();
+    if (_bat_bar) {
+        _bat_bar->setValue(bat_level);
+        _bat_bar->setBgColor(lv_color_hex(charging ? 0x19C25F : 0x2D6A4F), LV_PART_INDICATOR);
+    }
+    if (_bat_lightning) {
+        _bat_lightning->setHidden(!charging);
+    }
+    if (_bat_label) {
+        _bat_label->setText(fmt::format("{}%", bat_level));
     }
 }

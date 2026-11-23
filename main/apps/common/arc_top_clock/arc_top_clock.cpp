@@ -132,7 +132,7 @@ lv_obj_t* ArcTopClock::create_arc_segment()
     lv_obj_center(arc);
     lv_arclabel_set_radius(arc, 214);
     lv_arclabel_set_dir(arc, LV_ARCLABEL_DIR_CLOCKWISE);
-    lv_arclabel_set_text_horizontal_align(arc, LV_ARCLABEL_TEXT_ALIGN_LEFT);
+    lv_arclabel_set_text_horizontal_align(arc, LV_ARCLABEL_TEXT_ALIGN_LEADING);
     lv_arclabel_set_text_vertical_align(arc, LV_ARCLABEL_TEXT_ALIGN_CENTER);
     lv_arclabel_set_overflow(arc, LV_ARCLABEL_OVERFLOW_VISIBLE);
     lv_obj_set_style_text_font(arc, &lv_font_maple_mono_medium_24, LV_PART_MAIN);

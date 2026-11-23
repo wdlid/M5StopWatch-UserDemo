@@ -10,8 +10,6 @@
 #include <hal/utils/settings/settings.h>
 #include <apps/common/audio/audio.h>
 #include <mooncake_log.h>
-#include <esp_crt_bundle.h>
-#include <esp_http_client.h>
 #include <esp_wifi.h>
 #include <mbedtls/base64.h>
 
@@ -26,114 +24,6 @@ namespace {
 
 constexpr const char* _tag         = "GeminiLive";
 constexpr const char* _settings_ns = "gemini";
-
-struct CityCodeEntry {
-    const char* name;
-    const char* code;
-};
-
-constexpr CityCodeEntry kCityCodes[] = {
-    {"北京丰台", "101010900"}, {"丰台", "101010900"},   {"北京市丰台区", "101010900"},
-    {"海淀", "101010200"},     {"朝阳", "101010300"},   {"东城", "101011600"},
-    {"西城", "101011700"},     {"石景山", "101011000"}, {"通州", "101010600"},
-    {"昌平", "101010700"},     {"大兴", "101011100"},   {"顺义", "101010400"},
-    {"北京", "101010100"},     {"上海", "101020100"},   {"广州", "101280101"},
-    {"深圳", "101280601"},     {"杭州", "101210101"},   {"成都", "101270101"},
-    {"南京", "101190101"},     {"武汉", "101200101"},   {"西安", "101110101"},
-    {"重庆", "101040100"},     {"天津", "101030100"},   {"苏州", "101190401"},
-    {"长沙", "101250101"},     {"郑州", "101180101"},   {"青岛", "101120201"},
-    {"沈阳", "101070101"},     {"大连", "101070201"},   {"厦门", "101230201"},
-    {"福州", "101230101"},     {"济南", "101120101"},   {"合肥", "101220101"},
-    {"昆明", "101290101"},     {"哈尔滨", "101050101"}, {"长春", "101060101"},
-    {"石家庄", "101090101"},   {"太原", "101100101"},   {"南昌", "101240101"},
-    {"南宁", "101300101"},     {"贵阳", "101260101"},   {"兰州", "101160101"},
-    {"海口", "101310101"},     {"三亚", "101310201"},   {"珠海", "101280701"},
-    {"佛山", "101280800"},     {"东莞", "101281601"},   {"宁波", "101210401"},
-    {"无锡", "101190201"},
-};
-
-const char* resolve_city_code(const std::string& city)
-{
-    if (city.empty()) {
-        return "101010900";  // Default: Beijing Fengtai
-    }
-    for (const auto& entry : kCityCodes) {
-        if (city.find(entry.name) != std::string::npos) {
-            return entry.code;
-        }
-    }
-    return "101010900";
-}
-
-struct WeatherRespBuf {
-    std::string body;
-};
-
-esp_err_t weather_http_cb(esp_http_client_event_t* evt)
-{
-    auto* b = static_cast<WeatherRespBuf*>(evt->user_data);
-    if (evt->event_id == HTTP_EVENT_ON_DATA && b != nullptr && evt->data != nullptr && evt->data_len > 0) {
-        if (b->body.size() + evt->data_len <= 8192) {
-            b->body.append(static_cast<const char*>(evt->data), evt->data_len);
-        }
-    }
-    return ESP_OK;
-}
-
-std::string query_weather_itboy(const std::string& city)
-{
-    const char* code = resolve_city_code(city);
-    std::string url  = std::string("http://t.weather.itboy.net/api/weather/city/") + code;
-
-    WeatherRespBuf resp_buf;
-    esp_http_client_config_t cfg = {};
-    cfg.url                      = url.c_str();
-    cfg.method                   = HTTP_METHOD_GET;
-    cfg.timeout_ms               = 4000;
-    cfg.event_handler            = weather_http_cb;
-    cfg.user_data                = &resp_buf;
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client == nullptr) {
-        return R"({"status":"error","message":"HTTP client init failed"})";
-    }
-
-    esp_err_t err = esp_http_client_perform(client);
-    int status    = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
-    if (err != ESP_OK || status != 200 || resp_buf.body.empty()) {
-        return R"({"status":"error","message":"Weather API request failed"})";
-    }
-
-    JsonDocument doc;
-    if (deserializeJson(doc, resp_buf.body) != DeserializationError::Ok) {
-        return R"({"status":"error","message":"Weather JSON parse error"})";
-    }
-
-    JsonDocument out;
-    out["status"]  = "ok";
-    out["city"]    = doc["cityInfo"]["city"] | (city.empty() ? "北京市丰台区" : city.c_str());
-    out["wendu"]   = doc["data"]["wendu"] | "";
-    out["shidu"]   = doc["data"]["shidu"] | "";
-    out["quality"] = doc["data"]["quality"] | "";
-    out["pm25"]    = doc["data"]["pm25"] | 0;
-    out["ganmao"]  = doc["data"]["ganmao"] | "";
-
-    if (doc["data"]["forecast"].is<JsonArray>() && doc["data"]["forecast"].size() > 0) {
-        JsonObject today = doc["data"]["forecast"][0];
-        out["type"]      = today["type"] | "";
-        out["high"]      = today["high"] | "";
-        out["low"]       = today["low"] | "";
-        out["fx"]        = today["fx"] | "";
-        out["fl"]        = today["fl"] | "";
-        out["notice"]    = today["notice"] | "";
-    }
-
-    std::string res;
-    serializeJson(out, res);
-    return res;
-}
 
 std::string get_current_datetime_str()
 {
@@ -438,19 +328,14 @@ std::string GeminiLiveClient::buildSetupJson() const
     }
     {
         JsonObject f     = funcDecls.add<JsonObject>();
-        f["name"]        = "get_weather";
-        f["description"] = "查询指定城市（默认北京市丰台区）的实时天气、气温、湿度、空气质量及预报";
-        f["parameters"]["type"] = "object";
-        f["parameters"]["properties"]["city"]["type"]        = "string";
-        f["parameters"]["properties"]["city"]["description"] = "城市或区县名，如北京丰台区、上海、深圳";
-    }
-    {
-        JsonObject f     = funcDecls.add<JsonObject>();
         f["name"]        = "stop_conversation";
         f["description"] = "当用户说再见、退下、暂停、没事了时结束当前语音会话";
         f["parameters"]["type"] = "object";
         f["parameters"]["properties"].to<JsonObject>();
     }
+
+    // Enable Gemini built-in Google Search grounding (handles web search & weather server-side)
+    setup["tools"][1]["googleSearch"].to<JsonObject>();
 
     std::string out;
     serializeJson(doc, out);
@@ -536,15 +421,6 @@ std::string GeminiLiveClient::executeToolCalls(const std::string& rawJsonText)
             } else {
                 resObj["status"]  = "error";
                 resObj["message"] = "Invalid time";
-            }
-        } else if (name == "get_weather") {
-            std::string city = args["city"] | "北京市丰台区";
-            std::string wjson = query_weather_itboy(city);
-            JsonDocument wdoc;
-            if (deserializeJson(wdoc, wjson) == DeserializationError::Ok) {
-                resObj.set(wdoc.as<JsonObject>());
-            } else {
-                resObj["status"] = "error";
             }
         } else if (name == "stop_conversation") {
             resObj["status"]  = "ok";

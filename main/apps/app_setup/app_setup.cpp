@@ -166,9 +166,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.initialScrollIndex = _root_scroll_index;
         cfg.onLeftAction       = [this]() { close(); };
 
-        const int brightness      = GetHAL().getBackLightBrightness();
         const uint32_t timeout    = GetHAL().getScreenTimeout();
-        const int volume          = GetHAL().getSpeakerVolume();
         const auto btn_cfg        = GetHAL().getButtonConfig();
         const auto wifi_status    = GetHAL().getWifiStatus();
         const auto time_hms       = GetHAL().getTimeHms();
@@ -178,7 +176,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.items = {
             {
                 "Display",
-                fmt::format("{}  /  {}%", theme_mode == Hal::ThemeMode::Dark ? "Dark" : "Light", brightness),
+                fmt::format("{}  /  {}", theme_mode == Hal::ThemeMode::Dark ? "Dark" : "Light", format_timeout(timeout)),
                 LV_SYMBOL_IMAGE,
                 0xFFB74D,
                 true,
@@ -186,7 +184,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "Sound & Touch",
-                fmt::format("{}%  /  {}", volume, format_button_cfg(btn_cfg)),
+                format_button_cfg(btn_cfg),
                 LV_SYMBOL_VOLUME_MAX,
                 0x4FC3F7,
                 true,
@@ -230,19 +228,11 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.items = {
             {
                 "Theme",
-                GetHAL().getThemeMode() == Hal::ThemeMode::Dark ? "Dark" : "Light (Celadon)",
+                GetHAL().getThemeMode() == Hal::ThemeMode::Dark ? "Dark" : "Light (Warm)",
                 LV_SYMBOL_IMAGE,
                 0x4DD0E1,
                 true,
                 [launch_worker]() { launch_worker([]() { return std::make_unique<ThemeWorker>(); }); },
-            },
-            {
-                "Brightness",
-                fmt::format("{}%", GetHAL().getBackLightBrightness()),
-                LV_SYMBOL_EYE_OPEN,
-                0xFFB74D,
-                true,
-                [launch_worker]() { launch_worker([]() { return std::make_unique<BrightnessWorker>(); }); },
             },
             {
                 "Screen Timeout",
@@ -280,14 +270,6 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 
         cfg.items = {
-            {
-                "Volume",
-                fmt::format("{}%", GetHAL().getSpeakerVolume()),
-                LV_SYMBOL_VOLUME_MAX,
-                0x4FC3F7,
-                true,
-                [launch_worker]() { launch_worker([]() { return std::make_unique<VolumeWorker>(); }); },
-            },
             {
                 "Button Feedback",
                 format_button_cfg(GetHAL().getButtonConfig()),

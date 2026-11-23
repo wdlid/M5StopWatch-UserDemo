@@ -6,6 +6,7 @@
 #pragma once
 
 #include "../gemini_client.h"
+#include <hal/hal.h>
 #include <array>
 #include <functional>
 #include <memory>
@@ -68,10 +69,18 @@ public:
     {
         return _anim_tick;
     }
+    float orbitPhase() const
+    {
+        return _orbit_phase;
+    }
+    float smoothEnergy() const
+    {
+        return _smooth_energy;
+    }
 
 private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
-    std::unique_ptr<uitk::lvgl_cpp::Container> _mist_canvas;
+    std::unique_ptr<uitk::lvgl_cpp::Container> _orbs_canvas;
     std::unique_ptr<uitk::lvgl_cpp::Container> _pattern_touch;
     std::unique_ptr<uitk::lvgl_cpp::Label> _status_label;
     std::unique_ptr<uitk::lvgl_cpp::Label> _transcript_label;
@@ -80,21 +89,26 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Label> _web_info;
     std::unique_ptr<uitk::lvgl_cpp::Label> _web_hint;
 
-    gemini::SessionState _state = gemini::SessionState::Disconnected;
-    bool _is_talking            = false;
-    bool _web_config_active     = false;
-    bool _pattern_pressed       = false;
+    gemini::SessionState _state   = gemini::SessionState::Disconnected;
+    Hal::ThemeMode _last_theme    = Hal::ThemeMode::Dark;
+    bool _is_talking              = false;
+    bool _web_config_active       = false;
+    bool _pattern_pressed         = false;
+    bool _is_user_transcript      = false;
 
     float _audio_level       = 0.0f;
     float _smooth_level      = 0.0f;
     float _peak_frequency_hz = 0.0f;
     float _smooth_pitch      = 0.0f;
+    float _orbit_phase       = 0.0f;
+    float _smooth_energy     = 0.2f;
     uint32_t _anim_tick      = 0;
 
     SpectrumBands _target_bands         = {};
     SpectrumBands _display_bands        = {};
     ReducedSpectrumBands _reduced_bands = {};
 
+    void applyTheme();
     void updateReducedBands();
 };
 

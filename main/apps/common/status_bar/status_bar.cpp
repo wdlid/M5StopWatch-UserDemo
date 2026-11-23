@@ -15,33 +15,32 @@
 #include <memory>
 #include <vector>
 #include <lvgl.h>
-#include <src/draw/lv_image_dsc.h>
 
 using namespace smooth_ui_toolkit;
 using namespace smooth_ui_toolkit::lvgl_cpp;
 
 /**
- * @brief
- *
+ * @brief Detects top-down swipe to open Quick Settings and upward swipe to close it.
  */
 class StatuBarGesture {
 public:
     std::function<void(void)> onGesture;
+    std::function<void(void)> onSwipeUp;
 
-    StatuBarGesture() : _is_tracking(false), _last_state(LV_INDEV_STATE_REL)
+    StatuBarGesture() : _is_tracking_down(false), _is_tracking_up(false), _last_state(LV_INDEV_STATE_REL)
     {
     }
 
     void init()
     {
-        _is_tracking    = false;
-        _last_state     = LV_INDEV_STATE_REL;
-        _screen_height  = 466;
-        _top_threshold  = 20;  // 距离顶部 20 像素内触发
-        _swipe_min_dist = 50;  // 向下滑动至少 50 像素才触发
+        _is_tracking_down = false;
+        _is_tracking_up   = false;
+        _last_state       = LV_INDEV_STATE_REL;
+        _top_threshold    = 60;  // Trigger within top 60px (status bar area)
+        _swipe_min_dist   = 45;
     }
 
-    void update()
+    void update(bool isDropdownOpen)
     {
         lv_indev_t* indev = GetHAL().lvTouchpad;
         if (!indev) {
@@ -52,219 +51,241 @@ public:
         lv_point_t curr_point;
         lv_indev_get_point(indev, &curr_point);
 
-        // 1. 按下瞬间 (Transition: Released -> Pressed)
         if (state == LV_INDEV_STATE_PR && _last_state == LV_INDEV_STATE_REL) {
-            // 只有在按下那一刻就在顶部，才标记为追踪开始
-            if (curr_point.y <= _top_threshold && curr_point.y >= 0) {
-                _start_point = curr_point;
-                _is_tracking = true;
+            if (!isDropdownOpen && curr_point.y <= _top_threshold && curr_point.y >= 0) {
+                _start_point      = curr_point;
+                _is_tracking_down = true;
+                _is_tracking_up   = false;
+            } else if (isDropdownOpen) {
+                _start_point      = curr_point;
+                _is_tracking_up   = true;
+                _is_tracking_down = false;
             } else {
-                _is_tracking = false;  // 按下位置不对，此次滑动全程忽略
+                _is_tracking_down = false;
+                _is_tracking_up   = false;
             }
-        }
-        // 2. 抬起瞬间 (Transition: Pressed -> Released)
-        else if (state == LV_INDEV_STATE_REL && _last_state == LV_INDEV_STATE_PR) {
-            if (_is_tracking) {
-                int delta_y = curr_point.y - _start_point.y;  // 向下滑为正
-                int delta_x = abs(curr_point.x - _start_point.x);
+        } else if (state == LV_INDEV_STATE_REL && _last_state == LV_INDEV_STATE_PR) {
+            int delta_y = curr_point.y - _start_point.y;
+            int delta_x = abs(curr_point.x - _start_point.x);
 
-                // 判断标准：向下位移足够，且角度偏垂直
-                if (delta_y > _swipe_min_dist && delta_y > delta_x) {
-                    if (onGesture) {
-                        onGesture();
-                    }
+            if (_is_tracking_down && delta_y > _swipe_min_dist && delta_y > delta_x) {
+                if (onGesture) {
+                    onGesture();
                 }
-                _is_tracking = false;  // 重置追踪状态
+            } else if (_is_tracking_up && (-delta_y) > _swipe_min_dist && (-delta_y) > delta_x) {
+                if (onSwipeUp) {
+                    onSwipeUp();
+                }
             }
+            _is_tracking_down = false;
+            _is_tracking_up   = false;
         }
 
-        _last_state = state;  // 更新状态机
+        _last_state = state;
     }
 
 private:
-    bool _is_tracking;
-    lv_indev_state_t _last_state;  // 记录上一帧的状态
+    bool _is_tracking_down;
+    bool _is_tracking_up;
+    lv_indev_state_t _last_state;
     lv_point_t _start_point;
-    int _screen_height;
     int _top_threshold;
     int _swipe_min_dist;
 };
 
 namespace status_bar_view {
 
-constexpr int _module_y_ofs            = 8;
-constexpr int _wifi_icon_x_ofs         = -51;
-constexpr int _battery_icon_x_ofs      = -12;
-constexpr int _battery_level_x_ofs     = 39;
-constexpr int _battery_level_width     = 44;
+constexpr uint32_t _brightness_accent = 0x9C661F;  // Warm amber/ochre
+constexpr uint32_t _volume_accent     = 0x1F6E58;  // Deep forest teal
 
-class Widget {
+class QuickSettingRow {
 public:
-    virtual ~Widget()     = default;
-    virtual void update() = 0;
-};
-
-class WifiIndicator : public Widget {
-public:
-    WifiIndicator(lv_obj_t* parent, uint32_t colorPrimary)
+    QuickSettingRow(lv_obj_t* parent, int y, const char* symbol, const char* title, int minVal, int maxVal,
+                    uint32_t accentColor, std::function<void(int, bool)> onChanged)
+        : _on_changed(std::move(onChanged))
     {
-        _icon = std::make_unique<Label>(parent);
-        _icon->setText(LV_SYMBOL_WIFI);
+        auto& theme = GetHAL().getTheme();
+
+        _box = std::make_unique<Container>(parent);
+        _box->setSize(298, 80);
+        _box->align(LV_ALIGN_TOP_MID, 0, y);
+        _box->setRadius(16);
+        _box->setBgColor(lv_color_hex(theme.background));
+        _box->setBgOpa(LV_OPA_COVER);
+        _box->setBorderWidth(1);
+        _box->setBorderColor(lv_color_hex(theme.border));
+        _box->setPaddingAll(0);
+        _box->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _icon = std::make_unique<Label>(_box->get());
+        _icon->setText(symbol);
         _icon->setTextFont(&lv_font_montserrat_16);
-        _icon->setTextColor(lv_color_hex(colorPrimary));
-        _icon->align(LV_ALIGN_CENTER, _wifi_icon_x_ofs, _module_y_ofs);
+        _icon->setTextColor(lv_color_hex(accentColor));
+        _icon->align(LV_ALIGN_TOP_LEFT, 14, 12);
 
-        update();
+        _title = std::make_unique<Label>(_box->get());
+        _title->setText(title);
+        _title->setTextFont(&lv_font_montserrat_16);
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _title->align(LV_ALIGN_TOP_LEFT, 40, 12);
+
+        _value_label = std::make_unique<Label>(_box->get());
+        _value_label->setText("0%");
+        _value_label->setTextFont(&lv_font_montserrat_16);
+        _value_label->setTextColor(lv_color_hex(accentColor));
+        _value_label->align(LV_ALIGN_TOP_RIGHT, -14, 12);
+
+        _slider = std::make_unique<Slider>(_box->get());
+        _slider->setSize(266, 8);
+        _slider->align(LV_ALIGN_BOTTOM_MID, 0, -16);
+        _slider->setRange(minVal, maxVal, false);
+        _slider->setBgColor(lv_color_hex(theme.border), LV_PART_MAIN);
+        _slider->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
+        _slider->setBorderWidth(0, LV_PART_MAIN);
+        _slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+        _slider->setBgColor(lv_color_hex(accentColor), LV_PART_INDICATOR);
+        _slider->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR);
+        _slider->setBorderWidth(0, LV_PART_INDICATOR);
+        _slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+
+        lv_obj_set_style_bg_color(_slider->get(), lv_color_hex(theme.cardBackground), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(_slider->get(), LV_OPA_COVER, LV_PART_KNOB);
+        lv_obj_set_style_border_width(_slider->get(), 2, LV_PART_KNOB);
+        lv_obj_set_style_border_color(_slider->get(), lv_color_hex(accentColor), LV_PART_KNOB);
+        lv_obj_set_style_radius(_slider->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
+        lv_obj_set_style_pad_all(_slider->get(), 5, LV_PART_KNOB);
+
+        _slider->onValueChanged().connect([this](int32_t val) {
+            if (_syncing) {
+                return;
+            }
+            updateLabel(static_cast<int>(val));
+            if (_on_changed) {
+                _on_changed(static_cast<int>(val), false);
+            }
+        });
+
+        lv_obj_add_event_cb(
+            _slider->get(),
+            [](lv_event_t* e) {
+                auto* self = static_cast<QuickSettingRow*>(lv_event_get_user_data(e));
+                if (self && self->_on_changed) {
+                    int val = lv_slider_get_value(self->_slider->get());
+                    self->_on_changed(val, true);
+                }
+            },
+            LV_EVENT_RELEASED, this);
     }
 
-    void update() override
+    void setValue(int val)
     {
-        const auto status = GetHAL().getWifiStatus();
+        _syncing = true;
+        _slider->setValue(val);
+        _syncing = false;
+        updateLabel(val);
+    }
 
-        switch (status.mode) {
-        case Hal::WifiMode::Connected:
-            _icon->setHidden(false);
-            _icon->setOpa(LV_OPA_COVER);
-            break;
-        case Hal::WifiMode::Connecting:
-        case Hal::WifiMode::ConfigAp:
-        case Hal::WifiMode::BadgeAp:
-            _icon->setHidden(false);
-            _icon->setOpa(LV_OPA_50);
-            break;
-        case Hal::WifiMode::Off:
-        case Hal::WifiMode::Error:
-            _icon->setHidden(true);
-            break;
-        }
+    bool isSliderPressed() const
+    {
+        return _slider && lv_obj_has_state(_slider->get(), LV_STATE_PRESSED);
     }
 
 private:
+    void updateLabel(int val)
+    {
+        _value_label->setText(fmt::format("{}%", val));
+    }
+
+    std::unique_ptr<Container> _box;
     std::unique_ptr<Label> _icon;
-};
-
-class BatteryIcon {
-public:
-    BatteryIcon(lv_obj_t* parent, uint32_t colorSecondary, uint32_t colorPrimary)
-    {
-        _color_primary = colorPrimary;
-
-        _bat_top = std::make_unique<uitk::lvgl_cpp::Container>(parent);
-        _bat_top->setBgColor(lv_color_hex(colorSecondary));
-        _bat_top->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-        _bat_top->setBorderWidth(0);
-        _bat_top->setSize(4, 4);
-        _bat_top->setRadius(4);
-        _bat_top->setOutlineWidth(1);
-        _bat_top->setOutlineColor(lv_color_hex(colorPrimary));
-
-        _bar = std::make_unique<uitk::lvgl_cpp::Bar>(parent);
-        _bar->setSize(30, 12);
-        _bar->setRadius(4);
-        _bar->setRadius(0, LV_PART_INDICATOR);
-        _bar->setBgColor(lv_color_hex(colorSecondary));
-        _bar->setBgColor(lv_color_hex(colorPrimary), LV_PART_INDICATOR);
-        _bar->setBgOpa(LV_OPA_COVER);
-        _bar->setRange(0, 100);
-        _bar->setValue(0);
-        _bar->setPadding(1, 1, 1, 1);
-        _bar->setOutlineWidth(1);
-        _bar->setOutlineColor(lv_color_hex(colorPrimary));
-        _bar->setRadius(3, LV_PART_INDICATOR);
-
-        _lightning_icon = std::make_unique<uitk::lvgl_cpp::Image>(parent);
-        _lightning_icon->setSrc(&icon_bat_lightning);
-        _lightning_icon->setImageRecolor(lv_color_hex(colorPrimary));
-        _lightning_icon->setImageRecolorOpa(LV_OPA_COVER);
-        _lightning_icon->setHidden(true);
-    }
-
-    void align(lv_align_t align, int32_t x_ofs, int32_t y_ofs)
-    {
-        _bar->align(align, x_ofs, y_ofs);
-        lv_obj_align_to(_bat_top->get(), _bar->get(), LV_ALIGN_CENTER, 15, 0);
-        lv_obj_align_to(_lightning_icon->get(), _bar->get(), LV_ALIGN_CENTER, 0, 0);
-    }
-
-    void setLevel(uint8_t level)
-    {
-        _bar->setValue(level);
-    }
-
-    void setCharging(bool charging)
-    {
-        if (charging) {
-            _bar->setBgColor(lv_color_hex(0x19C25F), LV_PART_INDICATOR);
-            _lightning_icon->setHidden(false);
-        } else {
-            _bar->setBgColor(lv_color_hex(_color_primary), LV_PART_INDICATOR);
-            _lightning_icon->setHidden(true);
-        }
-    }
-
-private:
-    std::unique_ptr<Bar> _bar;
-    std::unique_ptr<Container> _bat_top;
-    std::unique_ptr<Image> _lightning_icon;
-
-    uint32_t _color_primary = 0;
-};
-
-class Battery : public Widget {
-public:
-    Battery(lv_obj_t* parent, uint32_t colorSecondary, uint32_t colorPrimary)
-    {
-        _battery_icon = std::make_unique<BatteryIcon>(parent, colorSecondary, colorPrimary);
-        _battery_icon->align(LV_ALIGN_CENTER, _battery_icon_x_ofs, _module_y_ofs);
-
-        _label_level = std::make_unique<Label>(parent);
-        _label_level->setText("");
-        _label_level->setTextColor(lv_color_hex(colorPrimary));
-        _label_level->setTextFont(&lv_font_montserrat_16);
-        _label_level->setWidth(_battery_level_width);
-        _label_level->setTextAlign(LV_TEXT_ALIGN_LEFT);
-        _label_level->align(LV_ALIGN_CENTER, _battery_level_x_ofs, _module_y_ofs);
-
-        update();
-    }
-
-    void update() override
-    {
-        auto level = GetHAL().getBatteryLevel();
-        _label_level->setText(fmt::format("{}%", level));
-        _battery_icon->setLevel(level);
-        _battery_icon->setCharging(GetHAL().isBatteryCharging());
-    }
-
-private:
-    std::unique_ptr<Label> _label_level;
-    std::unique_ptr<BatteryIcon> _battery_icon;
+    std::unique_ptr<Label> _title;
+    std::unique_ptr<Label> _value_label;
+    std::unique_ptr<Slider> _slider;
+    std::function<void(int, bool)> _on_changed;
+    bool _syncing = false;
 };
 
 class StatusBarView {
 public:
-    StatusBarView(lv_obj_t* parent, uint32_t colorSecondary, uint32_t colorPrimary)
+    StatusBarView(lv_obj_t* parent, uint32_t /*colorSecondary*/, uint32_t /*colorPrimary*/)
     {
-        _panel = std::make_unique<uitk::lvgl_cpp::Container>(lv_screen_active());
-        _panel->setBgColor(lv_color_hex(colorSecondary));
-        _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-        _panel->align(LV_ALIGN_TOP_MID, 0, 0);
-        _panel->setBorderWidth(0);
-        _panel->setSize(158, 65);
-        _panel->setRadius(27);
-        _panel->setPadding(0, 0, 0, 0);
-        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-        _panel->onClick().connect([this]() { hide(); });
+        auto& theme = GetHAL().getTheme();
+        bool is_light = (GetHAL().getThemeMode() == Hal::ThemeMode::Light);
 
-        _widgets.push_back(std::make_unique<WifiIndicator>(_panel->get(), colorPrimary));
-        _widgets.push_back(std::make_unique<Battery>(_panel->get(), colorSecondary, colorPrimary));
+        // Full-screen dimmed backdrop
+        _backdrop = std::make_unique<Container>(parent);
+        _backdrop->setSize(466, 466);
+        _backdrop->align(LV_ALIGN_CENTER, 0, 0);
+        _backdrop->setRadius(0);
+        _backdrop->setBorderWidth(0);
+        _backdrop->setPaddingAll(0);
+        _backdrop->setBgColor(lv_color_hex(is_light ? 0x5E584A : 0x000000));
+        _backdrop->setBgOpa(LV_OPA_60);
+        _backdrop->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _backdrop->onClick().connect([this]() { hide(); });
 
-        _panel->setPos(0, _pos_y_hide);
-        _panel->setHidden(true);
-        _is_hidden                                 = true;
-        _pos_y_anim.springOptions().bounce         = 0.1;
-        _pos_y_anim.springOptions().visualDuration = 0.3;
-        // _pos_y_anim.easingOptions().duration = 0.3;
+        // Quick Settings card
+        _card = std::make_unique<Container>(_backdrop->get());
+        _card->setSize(336, 286);
+        _card->align(LV_ALIGN_CENTER, 0, 12);
+        _card->setRadius(24);
+        _card->setBgColor(lv_color_hex(theme.cardBackground));
+        _card->setBgOpa(LV_OPA_COVER);
+        _card->setBorderWidth(1);
+        _card->setBorderColor(lv_color_hex(theme.border));
+        _card->setPaddingAll(0);
+        _card->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        // Stop clicks on card from bubbling to backdrop
+        _card->removeFlag(LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        // Top handle pill inside card
+        _handle = std::make_unique<Container>(_card->get());
+        _handle->setSize(36, 4);
+        _handle->align(LV_ALIGN_TOP_MID, 0, 12);
+        _handle->setRadius(2);
+        _handle->setBorderWidth(0);
+        _handle->setBgColor(lv_color_hex(theme.textMuted));
+        _handle->setBgOpa(LV_OPA_COVER);
+        _handle->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        // Card title
+        _title = std::make_unique<Label>(_card->get());
+        _title->setText("Quick Settings");
+        _title->setTextFont(&lv_font_montserrat_20);
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _title->align(LV_ALIGN_TOP_MID, 0, 26);
+
+        // Brightness row (5% - 100%)
+        _brightness_row = std::make_unique<QuickSettingRow>(
+            _card->get(), 64, LV_SYMBOL_EYE_OPEN, "Brightness", 5, 100, _brightness_accent,
+            [](int val, bool save) { GetHAL().setBackLightBrightness(val, save); });
+
+        // Volume row (0% - 100%)
+        _volume_row = std::make_unique<QuickSettingRow>(
+            _card->get(), 154, LV_SYMBOL_VOLUME_MAX, "Volume", 0, 100, _volume_accent,
+            [](int val, bool save) { GetHAL().setSpeakerVolume(val, save); });
+
+        // Bottom close hint button
+        _close_hint = std::make_unique<Container>(_card->get());
+        _close_hint->setSize(220, 36);
+        _close_hint->align(LV_ALIGN_BOTTOM_MID, 0, -6);
+        _close_hint->setBgOpa(0);
+        _close_hint->setBorderWidth(0);
+        _close_hint->setPaddingAll(0);
+        _close_hint->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        _close_hint->onClick().connect([this]() { hide(); });
+
+        _close_label = std::make_unique<Label>(_close_hint->get());
+        _close_label->setText(LV_SYMBOL_UP "  Swipe up to close");
+        _close_label->setTextFont(&lv_font_montserrat_14);
+        _close_label->setTextColor(lv_color_hex(theme.textSecondary));
+        _close_label->align(LV_ALIGN_CENTER, 0, 0);
+
+        _backdrop->setHidden(true);
+        _is_hidden = true;
+        _pos_y_anim.springOptions().bounce         = 0.08;
+        _pos_y_anim.springOptions().visualDuration = 0.25;
         _pos_y_anim.teleport(_pos_y_hide);
     }
 
@@ -272,28 +293,22 @@ public:
     {
         _pos_y_anim.update();
         if (!_pos_y_anim.done()) {
-            _panel->setPos(0, _pos_y_anim.directValue());
-        } else {
-            if (_hide_panel_flag) {
-                _hide_panel_flag = false;
-                _panel->setHidden(true);
-            }
-        }
-
-        if (GetHAL().millis() - _last_update_tick > 1000) {
-            _last_update_tick = GetHAL().millis();
-            for (auto& widget : _widgets) {
-                widget->update();
-            }
+            _card->setPos(0, _pos_y_anim.directValue());
+        } else if (_hide_panel_flag) {
+            _hide_panel_flag = false;
+            _backdrop->setHidden(true);
         }
     }
 
     void show()
     {
-        _panel->moveForeground();
-        _panel->setHidden(false);
-        _pos_y_anim = _pos_y_show;
-        _is_hidden  = false;
+        _brightness_row->setValue(GetHAL().getBackLightBrightness());
+        _volume_row->setValue(GetHAL().getSpeakerVolume());
+        _backdrop->moveForeground();
+        _backdrop->setHidden(false);
+        _hide_panel_flag = false;
+        _pos_y_anim      = _pos_y_show;
+        _is_hidden       = false;
     }
 
     void hide()
@@ -308,23 +323,34 @@ public:
         return _is_hidden;
     }
 
-private:
-    const int _pos_y_show = -17;
-    const int _pos_y_hide = -85;
+    bool isSliderDragging() const
+    {
+        return (_brightness_row && _brightness_row->isSliderPressed()) ||
+               (_volume_row && _volume_row->isSliderPressed());
+    }
 
-    std::unique_ptr<Container> _panel;
-    std::vector<std::unique_ptr<Widget>> _widgets;
+private:
+    const int _pos_y_show = 12;
+    const int _pos_y_hide = -360;
+
+    std::unique_ptr<Container> _backdrop;
+    std::unique_ptr<Container> _card;
+    std::unique_ptr<Container> _handle;
+    std::unique_ptr<Label> _title;
+    std::unique_ptr<QuickSettingRow> _brightness_row;
+    std::unique_ptr<QuickSettingRow> _volume_row;
+    std::unique_ptr<Container> _close_hint;
+    std::unique_ptr<Label> _close_label;
+
     AnimateValue _pos_y_anim;
-    bool _is_hidden            = false;
-    bool _hide_panel_flag      = false;
-    uint32_t _last_update_tick = 0;
+    bool _is_hidden       = true;
+    bool _hide_panel_flag = false;
 };
 
 }  // namespace status_bar_view
 
 /**
- * @brief
- *
+ * @brief Quick Settings dropdown controller (replaces legacy status bar pill).
  */
 class StatusBar {
 public:
@@ -332,22 +358,25 @@ public:
     {
         _status_bar_gesture            = std::make_unique<StatuBarGesture>();
         _status_bar_gesture->onGesture = [&]() { handle_gesture(); };
+        _status_bar_gesture->onSwipeUp = [&]() {
+            if (_status_bar_view && !_status_bar_view->isHidden() && !_status_bar_view->isSliderDragging()) {
+                _status_bar_view->hide();
+            }
+        };
         _status_bar_gesture->init();
 
         _status_bar_view = std::make_unique<status_bar_view::StatusBarView>(parent, colorSecondary, colorPrimary);
-        _is_first_show   = !silent;
 
         if (!silent) {
             _status_bar_view->show();
-            _status_bar_show_tick = GetHAL().millis();
         }
     }
 
     void update()
     {
-        _status_bar_gesture->update();
+        bool open = _status_bar_view && !_status_bar_view->isHidden();
+        _status_bar_gesture->update(open);
         _status_bar_view->update();
-        update_visibility();
     }
 
     void show()
@@ -363,30 +392,15 @@ public:
 private:
     std::unique_ptr<StatuBarGesture> _status_bar_gesture;
     std::unique_ptr<status_bar_view::StatusBarView> _status_bar_view;
-    uint32_t _status_bar_show_tick = 0;
-    bool _is_first_show            = true;
 
     void handle_gesture()
     {
-        _status_bar_view->show();
-        _status_bar_show_tick = GetHAL().millis();
-    }
-
-    void update_visibility()
-    {
-        if (!_status_bar_view->isHidden()) {
-            if (GetHAL().millis() - _status_bar_show_tick > (_is_first_show ? 1800 : 6000)) {
-                _is_first_show = false;
-                _status_bar_view->hide();
-            }
+        if (_status_bar_view) {
+            _status_bar_view->show();
         }
     }
 };
 
-/**
- * @brief
- *
- */
 namespace view {
 
 static std::unique_ptr<StatusBar> _status_bar;

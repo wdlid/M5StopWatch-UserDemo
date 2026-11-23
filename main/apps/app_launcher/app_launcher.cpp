@@ -28,12 +28,7 @@ void AppLauncher::onLauncherOpen()
     {
         LvglLockGuard lock;
         create_launcher_view();
-        if (_is_first_open) {
-            _pending_status_bar_create = true;
-            _status_bar_create_tick    = GetHAL().millis() + 800;
-        } else {
-            view::create_status_bar(0xEDF4FF, 0x385179, true);
-        }
+        view::create_status_bar(0xEDF4FF, 0x385179, true);
     }
 
     if (_should_play_boot_sfx) {
@@ -55,27 +50,6 @@ void AppLauncher::onLauncherRunning()
     }
 
     LvglLockGuard lock;
-
-    uint32_t now = GetHAL().millis();
-
-    // Check pending status bar creation
-    if (_pending_status_bar_create && !view::is_status_bar_created() && now >= _status_bar_create_tick) {
-        view::create_status_bar(0xEDF4FF, 0x385179, false);
-        _pending_status_bar_create = false;
-    }
-
-    // Pop status bar if battery start charging
-    if (now - _last_charge_check_tick >= 1000) {
-        _last_charge_check_tick = now;
-
-        bool is_battery_charging = GetHAL().isBatteryCharging();
-        if (is_battery_charging && !_was_battery_charging && view::is_status_bar_created() &&
-            view::is_status_bar_hidden()) {
-            view::show_status_bar();
-        }
-
-        _was_battery_charging = is_battery_charging;
-    }
 
     _view->update();
     view::update_status_bar();
@@ -107,6 +81,9 @@ void AppLauncher::create_launcher_view()
     _view->onAppClicked = [&](int appID) {
         mclog::tagInfo(getAppInfo().name, "handle open app, app id: {}", appID);
         openApp(appID);
+    };
+    _view->onStatusBarClicked = [&]() {
+        view::show_status_bar();
     };
 }
 

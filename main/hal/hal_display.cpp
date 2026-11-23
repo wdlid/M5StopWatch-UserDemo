@@ -298,19 +298,19 @@ static const Hal::GlobalTheme _theme_dark = {
 };
 
 static const Hal::GlobalTheme _theme_light = {
-    .background         = 0xDCE5E1,  // 素雅浅天青，非纯白，素雅温润
-    .cardBackground     = 0xCCD8D2,  // 柔和青瓷卡片底色
-    .cardPressed        = 0xBAC9C2,  // 按下交互反馈底色
-    .textPrimary        = 0x26332D,  // 深青墨松色，高对比清晰易读
-    .textSecondary      = 0x587066,  // 黛绿/灰绿说明文字
-    .textMuted          = 0x83968D,  // 弱化提示/指示箭头
-    .border             = 0xB6C5BE,  // 柔和分割线
-    .accent             = 0x2E8B57,  // 典雅翡翠绿强调色
-    .statusBarPrimary   = 0x587066,  // 状态栏前景色
-    .statusBarSecondary = 0x26332D,  // 状态栏背景色
+    .background         = 0xF5EFE6,  // Warm parchment cream (Anthropic style)
+    .cardBackground     = 0xFAF6EE,  // Soft warm off-white card
+    .cardPressed        = 0xEAE2D3,  // Warm sand pressed feedback
+    .textPrimary        = 0x1F1E1B,  // Deep warm charcoal ink
+    .textSecondary      = 0x6E675C,  // Warm taupe secondary text
+    .textMuted          = 0x9E9587,  // Muted warm gray
+    .border             = 0xE2D9C8,  // Subtle warm border
+    .accent             = 0xD97757,  // Anthropic terracotta accent
+    .statusBarPrimary   = 0x2D2A24,  // Warm charcoal status bar text/icons
+    .statusBarSecondary = 0xF5EFE6,  // Matches warm parchment background
 };
 
-static std::atomic<Hal::ThemeMode> _theme_mode{Hal::ThemeMode::Dark};
+static std::atomic<Hal::ThemeMode> _theme_mode{Hal::ThemeMode::Light};
 
 void Hal::setThemeMode(Hal::ThemeMode mode, bool saveToSettings)
 {
@@ -335,7 +335,7 @@ Hal::ThemeMode Hal::getThemeMode(bool loadFromSettings)
 {
     if (loadFromSettings) {
         Settings settings(std::string(Hal::SettingsNs), false);
-        int val = settings.GetInt("theme_mode", 0);
+        int val = settings.GetInt("theme_mode", 1);
         if (val < 0 || val > 1) {
             val = 0;
         }
