@@ -110,7 +110,7 @@ public:
         _panel->setSize(466, 466);
         _panel->setAlign(LV_ALIGN_CENTER);
         _panel->setBorderWidth(0);
-        _panel->setBgOpa(0);
+        _panel->setBgOpa(LV_OPA_COVER);
         _panel->setPaddingAll(0);
         _panel->setBgColor(lv_color_black());
 

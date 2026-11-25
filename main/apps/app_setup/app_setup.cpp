@@ -208,7 +208,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "System",
-                fmt::format("v{}", common::FirmwareVersion),
+                fmt::format("{}", common::FirmwareVersion),
                 LV_SYMBOL_SETTINGS,
                 0x90A4AE,
                 true,
@@ -331,7 +331,7 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
             },
             {
                 "Firmware",
-                fmt::format("v{}  /  Check Update", common::FirmwareVersion),
+                fmt::format("{}  /  Check Update", common::FirmwareVersion),
                 LV_SYMBOL_DOWNLOAD,
                 0x4AD78C,
                 true,

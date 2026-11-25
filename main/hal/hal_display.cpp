@@ -78,6 +78,8 @@ public:
 
     const uint8_t *getInitCommands(uint8_t listno) const override
     {
+        // Keep WRCTRL/brightness at 0 through Display ON so uninitialized GRAM
+        // is never illuminated (avoids the white flash on cold boot / deep-sleep wake).
         static constexpr uint8_t list0[] = {
             0x11, 0 + CMD_INIT_DELAY,
             150,  // Sleep out
@@ -91,7 +93,7 @@ public:
             0,    0x36,
             1,    0,
             0x51, 1,
-            0xA0, 0x29,
+            0x00, 0x29,  // brightness 0, then Display ON
             0,    0xff,
             0xff  // end
         };
@@ -160,11 +162,18 @@ public:
         // io_expander.digitalWrite(PY32_L3B_EN_PIN, 1);
         // io_expander.digitalWrite(PY32_OLED_RST_PIN, 1);
 
+        // So init_impl's post-clear setBrightness() stays dark (default is 127).
+        _brightness = 0;
+
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
         enableFrameBuffer(false);
 
-        _panel_instance.setBrightness(128);
+        // FB was just allocated from uncleared PSRAM — paint black and push it
+        // while the panel is still at brightness 0.
+        clear();
+        display();
+        _panel_instance.setBrightness(0);
 
         return true;
     }
@@ -404,9 +413,13 @@ void Hal::display_init()
     //     _canvas.reset();
     // }
 
-    // Load brightness from settings
-    auto brightness = getBackLightBrightness(true);
-    setBackLightBrightness(brightness, false);
+    // Load brightness from settings but keep the panel dark until LVGL has
+    // flushed the first frame (see lvgl_init). Applying brightness here is what
+    // made deep-sleep wake flash an empty white GRAM before the UI appeared.
+    getBackLightBrightness(true);
+    if (_display) {
+        _display->setBrightness(0);
+    }
 
     // Load color temperature from settings
     getColorTemperature(true);
@@ -772,7 +785,12 @@ void Hal::lvgl_init()
         uitk::lvgl_cpp::ScreenActive screen;
         screen.setBgColor(lv_color_hex(getTheme().background));
         GetHAL().bootLogo = std::make_unique<BootLogo>();
+        // Paint the boot frame while brightness is still 0, then illuminate.
+        lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(nullptr);
     }
+
+    setBackLightBrightness(_bl_brightness, false);
 }
 
 bool Hal::lvglLock()
