@@ -169,10 +169,10 @@ public:
 
         enableFrameBuffer(false);
 
-        // FB was just allocated from uncleared PSRAM — paint black and push it
-        // while the panel is still at brightness 0.
+        // Zero the FB in RAM only. Do NOT call display() here: a full-screen push
+        // without TE sync desynchronizes this panel (content shifts, e.g. right
+        // quarter wrapping to the left). LVGL's flush path waits for TE first.
         clear();
-        display();
         _panel_instance.setBrightness(0);
 
         return true;
