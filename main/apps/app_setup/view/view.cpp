@@ -19,8 +19,9 @@ constexpr int kScreenCenter = 233;
 constexpr int kRowWidth     = 364;
 constexpr int kRowHeight    = 78;
 constexpr int kRowGap       = 14;
-constexpr int kTopPad       = 136;
-constexpr int kBottomPad    = 156;
+constexpr int kTopPad = 136;
+// Bottom inset so last row center can reach screen center (233 - 39 = 194).
+constexpr int kBottomPad = 194;
 
 }  // namespace
 
@@ -56,13 +57,9 @@ SelectMenuPage::SelectMenuPage(Config config) : _config(std::move(config))
         cursor_y += kRowHeight + kRowGap;
     }
 
-    // Add bottom spacer so the last item can snap to center
-    auto bottom_spacer = lv_obj_create(_list->get());
-    lv_obj_set_size(bottom_spacer, 10, kBottomPad);
-    lv_obj_set_pos(bottom_spacer, 0, cursor_y - kRowGap);
-    lv_obj_set_style_bg_opa(bottom_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(bottom_spacer, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_CLICKABLE);
+    // Use pad_bottom (not a spacer child) so snap-center only targets menu rows.
+    // A spacer obj defaults to SNAPPABLE and would let the last row scroll to the top.
+    lv_obj_set_style_pad_bottom(_list->get(), kBottomPad, LV_PART_MAIN);
 
     lv_obj_add_event_cb(
         _list->get(),
