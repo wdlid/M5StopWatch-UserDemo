@@ -334,8 +334,8 @@ public:
             _prev_src_sample = samples[count - 1];
             _stream_has_prev = true;
 
-            // Pre-buffering jitter filter: accumulate ~120ms before starting playback to absorb initial network jitter
-            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.12f);
+            // Pre-buffering jitter filter: accumulate ~200ms before starting playback to absorb Wi-Fi jitter
+            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.20f);
             if (!_stream_active) {
                 if (!_stream_prebuffering) {
                     _stream_prebuffering    = true;
@@ -343,7 +343,7 @@ public:
                 }
                 const uint32_t elapsed_ms =
                     (xTaskGetTickCount() - _stream_prebuffer_start) * portTICK_PERIOD_MS;
-                if (_stream_count >= PREBUFFER_SAMPLES || elapsed_ms >= 150) {
+                if (_stream_count >= PREBUFFER_SAMPLES || elapsed_ms >= 280) {
                     _stream_prebuffering = false;
                     _stream_active       = true;
                     _is_playing          = true;
@@ -477,9 +477,14 @@ private:
         std::vector<int16_t> current_data;
         constexpr std::size_t CHUNK_SAMPLES = 512;
         std::array<int16_t, CHUNK_SAMPLES> stream_chunk = {};
-        bool was_streaming = false;
-        int16_t last_stream_val = 0;
-        uint32_t fft_decim      = 0;
+        bool was_streaming           = false;
+        int16_t last_stream_val      = 0;
+        uint32_t fft_decim           = 0;
+        std::size_t resume_fade_left = 0;
+        // Keep I2S DMA continuously fed during network gaps. Empty vTaskDelay waits previously
+        // starved the DMA and produced rapid "machine-gun" underrun clicks.
+        constexpr std::size_t SILENCE_CHUNK    = 512;
+        constexpr std::size_t REBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.10f);  // 100ms
 
         while (1) {
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -504,10 +509,10 @@ private:
                         _is_playing = true;
                     } else if (_stream_count > 0 && _stream_ring != nullptr) {
                         if (_stream_prebuffering) {
-                            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.12f);
+                            constexpr std::size_t PREBUFFER_SAMPLES = static_cast<std::size_t>(sample_rate * 0.20f);
                             const uint32_t elapsed_ms =
                                 (xTaskGetTickCount() - _stream_prebuffer_start) * portTICK_PERIOD_MS;
-                            if (_stream_count < PREBUFFER_SAMPLES && elapsed_ms < 150) {
+                            if (_stream_count < PREBUFFER_SAMPLES && elapsed_ms < 280) {
                                 need_prebuffer_wait = true;
                             } else {
                                 _stream_prebuffering = false;
@@ -538,8 +543,10 @@ private:
                     // Drain hardware pipeline with silence without stopping the master I2S clock
                     // (Disabling TX in duplex mode halts shared BCLK/WS, causing ES8311 frame desync and squeal)
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                        std::min<std::size_t>(_silence_buffer.size(), 512) * sizeof(int16_t));
-                    was_streaming = false;
+                                        std::min<std::size_t>(_silence_buffer.size(), SILENCE_CHUNK) * sizeof(int16_t));
+                    was_streaming    = false;
+                    resume_fade_left = 0;
+                    last_stream_val  = 0;
                 }
 
                 if (has_oneshot) {
@@ -579,6 +586,23 @@ private:
                     if (_out_muted.load()) {
                         setOutputMute(false);
                     }
+
+                    // Soft fade-in after a silence gap so the first PCM sample after 0 doesn't click
+                    if (resume_fade_left > 0) {
+                        const std::size_t fade_n     = std::min(popped, resume_fade_left);
+                        const std::size_t fade_total = 64;
+                        const std::size_t fade_done  = fade_total - resume_fade_left;
+                        for (std::size_t i = 0; i < fade_n; ++i) {
+                            const float t =
+                                0.5f * (1.0f - std::cos(static_cast<float>(M_PI) *
+                                                        static_cast<float>(fade_done + i) /
+                                                        static_cast<float>(fade_total)));
+                            stream_chunk[i] = static_cast<int16_t>(
+                                std::clamp(static_cast<float>(stream_chunk[i]) * t, -32768.0f, 32767.0f));
+                        }
+                        resume_fade_left -= fade_n;
+                    }
+
                     was_streaming   = true;
                     last_stream_val = stream_chunk[popped - 1];
                     // Update RMS level for UI animation during playback
@@ -598,28 +622,53 @@ private:
                 }
 
                 if (was_streaming) {
-                    // Hold stream open across network jitter gaps (up to ~360ms in 10ms steps) before flushing silence tail
+                    // Hold stream open across network jitter gaps. Pace time by writing silence
+                    // so the I2S DMA never underruns (empty delays caused machine-gun clicks).
                     bool received_more = false;
-                    for (int wait_idx = 0; wait_idx < 36; ++wait_idx) {
-                        vTaskDelay(pdMS_TO_TICKS(10));
-                        std::lock_guard<std::mutex> lock(_play_mutex);
-                        if (_stream_abort_req) {
-                            break;
+                    bool first_gap     = true;
+                    for (int wait_idx = 0; wait_idx < 45; ++wait_idx) {
+                        {
+                            std::lock_guard<std::mutex> lock(_play_mutex);
+                            if (_stream_abort_req) {
+                                break;
+                            }
+                            // Always require a real rebuffer — never resume on a handful of samples
+                            // (old wait_idx>10 escape hatch drip-fed scraps and retriggered underruns).
+                            if (_stream_count >= REBUFFER_SAMPLES || !_audio_data.empty()) {
+                                received_more = true;
+                                break;
+                            }
                         }
-                        if (_stream_count >= static_cast<std::size_t>(sample_rate * 0.06f) || !_audio_data.empty() ||
-                            (_stream_count > 0 && wait_idx > 10)) {
-                            received_more = true;
-                            break;
+
+                        if (first_gap && last_stream_val != 0) {
+                            // Cosine fade-out from last sample to zero for the first gap chunk
+                            for (std::size_t i = 0; i < SILENCE_CHUNK; ++i) {
+                                const float t =
+                                    0.5f * (1.0f + std::cos(static_cast<float>(M_PI) * static_cast<float>(i) /
+                                                            static_cast<float>(SILENCE_CHUNK)));
+                                stream_chunk[i] = static_cast<int16_t>(
+                                    std::clamp(static_cast<float>(last_stream_val) * t, -32768.0f, 32767.0f));
+                            }
+                            esp_codec_dev_write(_codec_dev, (void*)stream_chunk.data(),
+                                                SILENCE_CHUNK * sizeof(int16_t));
+                            first_gap       = false;
+                            last_stream_val = 0;
+                        } else {
+                            esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
+                                                SILENCE_CHUNK * sizeof(int16_t));
+                            first_gap = false;
                         }
+                        _current_rms.store(0.0f, std::memory_order_relaxed);
                     }
 
                     if (received_more) {
+                        resume_fade_left = 64;
                         continue;
                     }
 
                     // Stream finished: flush silence tail to ensure clean DMA buffer without popping
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                        std::min<std::size_t>(_silence_buffer.size(), 512) * sizeof(int16_t));
+                                        std::min<std::size_t>(_silence_buffer.size(), SILENCE_CHUNK) * sizeof(int16_t));
 
                     _current_rms.store(0.0f, std::memory_order_relaxed);
                     {
@@ -636,8 +685,9 @@ private:
                         _prev_src_sample     = 0;
                         _is_playing          = false;
                     }
-                    was_streaming   = false;
-                    last_stream_val = 0;
+                    was_streaming    = false;
+                    last_stream_val  = 0;
+                    resume_fade_left = 0;
                     if (GetHAL().isScreenSleeping()) {
                         GetHAL().audio_enter_standby();
                     }
