@@ -35,6 +35,7 @@ public:
 
     void update(bool force = false);
     void applyTheme();
+    void setPagerScrolling(bool scrolling);
 
     void setFaceIndex(int index, bool animate);
     int getFaceIndex() const
@@ -131,7 +132,6 @@ private:
     // Face 3: Bauhaus Atelier
     struct BauhausFace {
         lv_obj_t* page       = nullptr;
-        lv_obj_t* dial_plate = nullptr;
         lv_obj_t* outer_ring = nullptr;
         std::array<lv_obj_t*, 60> ticks{};
         std::array<std::array<lv_point_precise_t, 2>, 60> tick_pts{};
@@ -178,6 +178,10 @@ private:
     void update_echo_halo(const TimeHms& t, const DateYmd& d, int wday, const weather::Snapshot& w, bool force);
     void update_echo_spot(const TimeHms& t, const DateYmd& d, int wday, const weather::Snapshot& w, bool force);
     void update_bauhaus(const TimeHms& t, const DateYmd& d, int wday, const weather::Snapshot& w, bool force);
+    void update_single_face(int idx, const TimeHms& t, const DateYmd& d, int wday, const weather::Snapshot& w,
+                            bool refresh_meta);
+    void flush_dirty_faces_for_scroll();
+    void update_scroll_dir_bounds();
     void refresh_indicator_visuals(bool active_interaction);
 
     lv_obj_t* _root     = nullptr;
@@ -191,9 +195,14 @@ private:
     EchoSpotFace _spot;
     BauhausFace _bauhaus;
 
-    int _active_face           = 0;
-    uint32_t _last_interact_ms = 0;
-    bool _ind_dimmed           = false;
+    int _active_face            = 0;
+    uint32_t _last_interact_ms  = 0;
+    uint32_t _last_poll_ms      = 0;
+    bool _ind_dimmed            = false;
+    bool _vert_scrolling        = false;
+    bool _pager_scrolling       = false;
+    std::array<bool, kFaceCount> _face_sec_dirty{};
+    std::array<bool, kFaceCount> _face_meta_dirty{};
 
     int _last_sec              = -1;
     int _last_min              = -1;
@@ -201,6 +210,7 @@ private:
     uint16_t _last_year        = 0;
     uint8_t _last_month        = 0;
     uint8_t _last_day          = 0;
+    weather::Snapshot _cached_weather;
     std::string _last_weather_sig;
     Hal::ThemeMode _last_theme = Hal::ThemeMode::Light;
 };

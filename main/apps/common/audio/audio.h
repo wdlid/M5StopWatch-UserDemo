@@ -17,4 +17,7 @@ void play_tone_from_midi(int midi, float durationSec = 0.02f, float volumeScale 
 
 void play_random_tone(int semitoneShift = 48, float durationSec = 0.02f, float volumeScale = 0.5f);
 
+/** Bright glockenspiel chime inspired by iOS Bedtime (Brahms lullaby: ding ding ding). */
+void play_eye_care_chime(float volumeScale = 0.55f);
+
 }  // namespace audio

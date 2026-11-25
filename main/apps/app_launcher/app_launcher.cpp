@@ -53,9 +53,26 @@ void AppLauncher::onLauncherRunning()
         return;
     }
 
+    // Poll physical buttons & PMIC state outside the LVGL mutex so I2C reads
+    // never block lvgl_rtos_task during touch scrolling.
+    if (_view) {
+        _view->pollInput();
+    } else {
+        GetHAL().updateButtonStates();
+    }
+
+    const uint32_t now       = GetHAL().millis();
+    const bool immediate_req = (_view && _view->hasPendingImmediateWork()) || !view::is_status_bar_hidden();
+    if (!immediate_req && (now - _last_ui_update_tick < 16)) {
+        return;
+    }
+    _last_ui_update_tick = now;
+
     LvglLockGuard lock;
 
-    _view->update();
+    if (_view) {
+        _view->update();
+    }
     view::update_status_bar();
 }
 

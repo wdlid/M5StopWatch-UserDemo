@@ -72,32 +72,46 @@ lv_obj_t* make_plain_box(lv_obj_t* parent, int w, int h)
     return o;
 }
 
-lv_obj_t* make_fullscreen_line(lv_obj_t* parent, int width)
+lv_obj_t* make_radial_line(lv_obj_t* parent, int width)
 {
     lv_obj_t* line = lv_line_create(parent);
     make_passive(line);
-    lv_obj_set_size(line, 466, 466);
-    lv_obj_set_pos(line, 0, 0);
     lv_obj_set_style_line_width(line, width, 0);
     lv_obj_set_style_line_rounded(line, true, 0);
     return line;
 }
 
+// Position & size the lv_line tightly around its endpoints so LVGL culls off-band
+// ticks/hands in 4 integer comparisons instead of scanning 466x466 per line.
+// (lv_line's LV_EVENT_REFR_EXT_DRAW_SIZE automatically adds line_width around coords.)
 void set_radial_line(lv_obj_t* line, lv_point_precise_t pts[2], float deg_from_top, float r_start, float r_end)
 {
     const float rad = (deg_from_top - 90.0f) * (kPi / 180.0f);
     const float cs  = std::cos(rad);
     const float sn  = std::sin(rad);
+    const float x0  = kCenter + cs * r_start;
+    const float y0  = kCenter + sn * r_start;
+    const float x1  = kCenter + cs * r_end;
+    const float y1  = kCenter + sn * r_end;
+
+    const int min_x = static_cast<int>(std::floor(std::min(x0, x1)));
+    const int min_y = static_cast<int>(std::floor(std::min(y0, y1)));
+    const int max_x = static_cast<int>(std::ceil(std::max(x0, x1)));
+    const int max_y = static_cast<int>(std::ceil(std::max(y0, y1)));
+
+    lv_obj_set_pos(line, min_x, min_y);
+    lv_obj_set_size(line, std::max(1, max_x - min_x + 1), std::max(1, max_y - min_y + 1));
+
 #if LV_USE_FLOAT
-    pts[0].x = kCenter + cs * r_start;
-    pts[0].y = kCenter + sn * r_start;
-    pts[1].x = kCenter + cs * r_end;
-    pts[1].y = kCenter + sn * r_end;
+    pts[0].x = x0 - static_cast<float>(min_x);
+    pts[0].y = y0 - static_cast<float>(min_y);
+    pts[1].x = x1 - static_cast<float>(min_x);
+    pts[1].y = y1 - static_cast<float>(min_y);
 #else
-    pts[0].x = static_cast<lv_value_precise_t>(std::lround(kCenter + cs * r_start));
-    pts[0].y = static_cast<lv_value_precise_t>(std::lround(kCenter + sn * r_start));
-    pts[1].x = static_cast<lv_value_precise_t>(std::lround(kCenter + cs * r_end));
-    pts[1].y = static_cast<lv_value_precise_t>(std::lround(kCenter + sn * r_end));
+    pts[0].x = static_cast<lv_value_precise_t>(std::lround(x0)) - min_x;
+    pts[0].y = static_cast<lv_value_precise_t>(std::lround(y0)) - min_y;
+    pts[1].x = static_cast<lv_value_precise_t>(std::lround(x1)) - min_x;
+    pts[1].y = static_cast<lv_value_precise_t>(std::lround(y1)) - min_y;
 #endif
     lv_line_set_points(line, pts, 2);
 }
@@ -122,6 +136,7 @@ ClockFacesView::ClockFacesView(lv_obj_t* parent)
     lv_obj_set_style_radius(_root, 0, 0);
     lv_obj_set_style_bg_color(_root, lv_color_hex(GetHAL().getTheme().background), 0);
     lv_obj_set_style_bg_opa(_root, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(_root, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(_root, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
 
@@ -134,37 +149,11 @@ ClockFacesView::ClockFacesView(lv_obj_t* parent)
     lv_obj_set_style_radius(_scroller, 0, 0);
     lv_obj_set_style_bg_opa(_scroller, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(_scroller, LV_DIR_VER);
+    lv_obj_remove_flag(_scroller, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_set_scroll_snap_y(_scroller, LV_SCROLL_SNAP_CENTER);
     lv_obj_add_flag(_scroller, LV_OBJ_FLAG_SCROLL_ONE);
     lv_obj_add_flag(_scroller, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
     lv_obj_set_scrollbar_mode(_scroller, LV_SCROLLBAR_MODE_OFF);
-
-    lv_obj_add_event_cb(
-        _scroller,
-        [](lv_event_t* e) {
-            auto* self = static_cast<ClockFacesView*>(lv_event_get_user_data(e));
-            if (!self || !self->_scroller) {
-                return;
-            }
-            const auto code = lv_event_get_code(e);
-            if (code == LV_EVENT_SCROLL_BEGIN || code == LV_EVENT_SCROLL) {
-                self->_last_interact_ms = GetHAL().millis();
-                int sy                  = lv_obj_get_scroll_y(self->_scroller);
-                int idx                 = std::clamp((sy + 233) / 466, 0, kFaceCount - 1);
-                if (idx != self->_active_face) {
-                    self->_active_face = idx;
-                }
-                self->refresh_indicator_visuals(true);
-            } else if (code == LV_EVENT_SCROLL_END) {
-                int sy                  = lv_obj_get_scroll_y(self->_scroller);
-                int idx                 = std::clamp((sy + 233) / 466, 0, kFaceCount - 1);
-                self->_active_face      = idx;
-                self->_last_interact_ms = GetHAL().millis();
-                GetHAL().setClockFaceIndex(idx, true);
-                self->refresh_indicator_visuals(true);
-            }
-        },
-        LV_EVENT_ALL, this);
 
     init_echo_time();
     init_echo_halo();
@@ -173,10 +162,49 @@ ClockFacesView::ClockFacesView(lv_obj_t* parent)
     init_indicators();
 
     applyTheme();
+    lv_obj_update_layout(_scroller);
     if (_active_face > 0) {
-        lv_obj_update_layout(_scroller);
         lv_obj_scroll_to_y(_scroller, _active_face * 466, LV_ANIM_OFF);
     }
+    update_scroll_dir_bounds();
+
+    // Attach scroll listener after initial positioning so boot/re-open does not re-save to NVS
+    lv_obj_add_event_cb(
+        _scroller,
+        [](lv_event_t* e) {
+            auto* self = static_cast<ClockFacesView*>(lv_event_get_user_data(e));
+            if (!self || !self->_scroller) {
+                return;
+            }
+            const auto code = lv_event_get_code(e);
+            if (code == LV_EVENT_SCROLL_BEGIN) {
+                self->_vert_scrolling   = true;
+                self->_last_interact_ms = GetHAL().millis();
+                // Allow bidirectional vertical drag once scroll has started, and catch up any offscreen face
+                lv_obj_set_scroll_dir(self->_scroller, LV_DIR_VER);
+                self->flush_dirty_faces_for_scroll();
+                self->refresh_indicator_visuals(true);
+            } else if (code == LV_EVENT_SCROLL) {
+                self->_last_interact_ms = GetHAL().millis();
+                int sy                  = lv_obj_get_scroll_y(self->_scroller);
+                int idx                 = std::clamp((sy + 233) / 466, 0, kFaceCount - 1);
+                if (idx != self->_active_face) {
+                    self->_active_face = idx;
+                    self->refresh_indicator_visuals(true);
+                }
+            } else if (code == LV_EVENT_SCROLL_END) {
+                self->_vert_scrolling   = false;
+                int sy                  = lv_obj_get_scroll_y(self->_scroller);
+                int idx                 = std::clamp((sy + 233) / 466, 0, kFaceCount - 1);
+                self->_active_face      = idx;
+                self->_last_interact_ms = GetHAL().millis();
+                GetHAL().setClockFaceIndex(idx, true);
+                self->update_scroll_dir_bounds();
+                self->refresh_indicator_visuals(true);
+            }
+        },
+        LV_EVENT_ALL, this);
+
     refresh_indicator_visuals(true);
     update(true);
 }
@@ -189,13 +217,51 @@ ClockFacesView::~ClockFacesView()
     }
 }
 
+void ClockFacesView::update_scroll_dir_bounds()
+{
+    if (!_scroller) {
+        return;
+    }
+    if (_active_face <= 0) {
+        lv_obj_set_scroll_dir(_scroller, LV_DIR_BOTTOM);
+    } else if (_active_face >= kFaceCount - 1) {
+        lv_obj_set_scroll_dir(_scroller, LV_DIR_TOP);
+    } else {
+        lv_obj_set_scroll_dir(_scroller, LV_DIR_VER);
+    }
+}
+
+void ClockFacesView::setPagerScrolling(bool scrolling)
+{
+    if (_pager_scrolling == scrolling) {
+        return;
+    }
+    _pager_scrolling = scrolling;
+    if (scrolling) {
+        // Ensure active clock face matches current time right as it scrolls into view
+        _last_poll_ms = 0;
+        const bool prev = _pager_scrolling;
+        _pager_scrolling = false;
+        update(false);
+        _pager_scrolling = prev;
+    } else {
+        _last_poll_ms = 0;
+        update(false);
+    }
+}
+
 void ClockFacesView::setFaceIndex(int index, bool animate)
 {
     index        = std::clamp(index, 0, kFaceCount - 1);
     _active_face = index;
     GetHAL().setClockFaceIndex(index, true);
+    flush_dirty_faces_for_scroll();
     if (_scroller) {
+        lv_obj_set_scroll_dir(_scroller, LV_DIR_VER);
         lv_obj_scroll_to_y(_scroller, index * 466, animate ? LV_ANIM_ON : LV_ANIM_OFF);
+        if (!animate) {
+            update_scroll_dir_bounds();
+        }
     }
     _last_interact_ms = GetHAL().millis();
     refresh_indicator_visuals(true);
@@ -408,14 +474,14 @@ void ClockFacesView::init_echo_time()
     _echo.num_9  = make_num("9", -150, 0);
 
     // Layer 1 (bottom hand): crisp cyan-blue second needle
-    _echo.sec_hand = make_fullscreen_line(_echo.page, 3);
+    _echo.sec_hand = make_radial_line(_echo.page, 3);
 
     // Layer 2 (middle hand): vibrant crimson-rose rounded capsule minute hand (odd width for exact center symmetry)
-    _echo.min_hand = make_fullscreen_line(_echo.page, 25);
+    _echo.min_hand = make_radial_line(_echo.page, 25);
 
-    // Layer 3 (top hand): soft pastel-pink rounded capsule hour hand with layer translucency (no double-blend seam)
-    _echo.hour_hand = make_fullscreen_line(_echo.page, 39);
-    lv_obj_set_style_opa(_echo.hour_hand, 218, 0);
+    // Layer 3 (top hand): soft pastel-pink rounded capsule hour hand with line translucency
+    _echo.hour_hand = make_radial_line(_echo.page, 39);
+    lv_obj_set_style_line_opa(_echo.hour_hand, 218, 0);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -426,11 +492,12 @@ void ClockFacesView::init_echo_halo()
 {
     _halo.page = make_plain_box(_scroller, 466, 466);
     lv_obj_set_pos(_halo.page, 0, 466);
+    lv_obj_set_style_bg_opa(_halo.page, LV_OPA_COVER, 0);
 
     // Full-screen 60 radial ticks flush to the 466x466 circular perimeter (r = 233)
     for (int i = 0; i < 60; ++i) {
         const bool is_major = (i % 5 == 0);
-        lv_obj_t* line      = make_fullscreen_line(_halo.page, is_major ? 3 : 2);
+        lv_obj_t* line      = make_radial_line(_halo.page, is_major ? 3 : 2);
         const float r_in    = is_major ? 212.0f : 220.0f;
         const float r_out   = 230.0f;
         set_radial_line(line, _halo.tick_pts[i].data(), static_cast<float>(i) * 6.0f, r_in, r_out);
@@ -532,12 +599,16 @@ void ClockFacesView::init_echo_spot()
 {
     _spot.page = make_plain_box(_scroller, 466, 466);
     lv_obj_set_pos(_spot.page, 0, 932);
+    lv_obj_set_style_bg_opa(_spot.page, LV_OPA_COVER, 0);
 
-    // Full-screen upper celestial horizon arc flush with the 466x466 edge
-    _spot.sky_arc = lv_arc_create(_spot.page);
+    // Clip upper horizon arc (204..336 deg -> y in 2..146) so LVGL skips arc rendering on lower 314 rows
+    lv_obj_t* sky_clip = make_plain_box(_spot.page, 466, 152);
+    lv_obj_set_pos(sky_clip, 0, 0);
+
+    _spot.sky_arc = lv_arc_create(sky_clip);
     make_passive(_spot.sky_arc);
     lv_obj_set_size(_spot.sky_arc, 462, 462);
-    lv_obj_center(_spot.sky_arc);
+    lv_obj_set_pos(_spot.sky_arc, 2, 2);
     lv_arc_set_bg_angles(_spot.sky_arc, 204, 336);
     lv_arc_set_range(_spot.sky_arc, 0, 1440);
     lv_arc_set_value(_spot.sky_arc, 720);
@@ -629,11 +700,14 @@ void ClockFacesView::init_echo_spot()
     lv_label_set_text(_spot.date_lbl, "TUESDAY  /  NOV 24");
     lv_obj_align(_spot.date_lbl, LV_ALIGN_CENTER, 0, 120);
 
-    // Full-screen bottom sweeping smile arc (fills left-to-right across 60 seconds)
-    _spot.sec_arc = lv_arc_create(_spot.page);
+    // Clip bottom smile arc (54..126 deg -> y in 411..464) so LVGL skips arc rendering on upper 404 rows
+    lv_obj_t* sec_clip = make_plain_box(_spot.page, 466, 62);
+    lv_obj_set_pos(sec_clip, 0, 404);
+
+    _spot.sec_arc = lv_arc_create(sec_clip);
     make_passive(_spot.sec_arc);
     lv_obj_set_size(_spot.sec_arc, 462, 462);
-    lv_obj_center(_spot.sec_arc);
+    lv_obj_set_pos(_spot.sec_arc, 2, 2 - 404);
     lv_arc_set_bg_angles(_spot.sec_arc, 54, 126);
     lv_arc_set_mode(_spot.sec_arc, LV_ARC_MODE_REVERSE);
     lv_arc_set_range(_spot.sec_arc, 0, 59);
@@ -654,11 +728,7 @@ void ClockFacesView::init_bauhaus()
 {
     _bauhaus.page = make_plain_box(_scroller, 466, 466);
     lv_obj_set_pos(_bauhaus.page, 0, 1398);
-
-    // Full-bleed enamel / obsidian dial surface filling the entire 466x466 circle
-    _bauhaus.dial_plate = make_plain_box(_bauhaus.page, 466, 466);
-    lv_obj_set_style_bg_opa(_bauhaus.dial_plate, LV_OPA_COVER, 0);
-    lv_obj_center(_bauhaus.dial_plate);
+    lv_obj_set_style_bg_opa(_bauhaus.page, LV_OPA_COVER, 0);
 
     // Full-perimeter hairline bezel ring right at the circular screen boundary
     _bauhaus.outer_ring = make_plain_box(_bauhaus.page, 464, 464);
@@ -673,7 +743,7 @@ void ClockFacesView::init_bauhaus()
         const int w            = is_cardinal ? 3 : (is_hour ? 2 : 1);
         const float r_in       = is_cardinal ? 205.0f : (is_hour ? 213.0f : 220.0f);
         const float r_out      = 228.5f;
-        lv_obj_t* line         = make_fullscreen_line(_bauhaus.page, w);
+        lv_obj_t* line         = make_radial_line(_bauhaus.page, w);
         set_radial_line(line, _bauhaus.tick_pts[i].data(), static_cast<float>(i) * 6.0f, r_in, r_out);
         _bauhaus.ticks[i] = line;
     }
@@ -765,12 +835,12 @@ void ClockFacesView::init_bauhaus()
     lv_label_set_text(_bauhaus.mday_lbl, "24");
     lv_obj_align(_bauhaus.mday_lbl, LV_ALIGN_RIGHT_MID, -10, 0);
 
-    // Sculpted analog hands (full-screen line bounds so caps never clip)
-    _bauhaus.hour_hand = make_fullscreen_line(_bauhaus.page, 7);
-    _bauhaus.hour_lume = make_fullscreen_line(_bauhaus.page, 3);
-    _bauhaus.min_hand  = make_fullscreen_line(_bauhaus.page, 5);
-    _bauhaus.min_lume  = make_fullscreen_line(_bauhaus.page, 1);
-    _bauhaus.sec_hand  = make_fullscreen_line(_bauhaus.page, 3);
+    // Sculpted analog hands (tight bounding boxes updated per second)
+    _bauhaus.hour_hand = make_radial_line(_bauhaus.page, 7);
+    _bauhaus.hour_lume = make_radial_line(_bauhaus.page, 3);
+    _bauhaus.min_hand  = make_radial_line(_bauhaus.page, 5);
+    _bauhaus.min_lume  = make_radial_line(_bauhaus.page, 1);
+    _bauhaus.sec_hand  = make_radial_line(_bauhaus.page, 3);
 
     // Machined dual-layer center pinion cap
     _bauhaus.cap_outer = make_plain_box(_bauhaus.page, 15, 15);
@@ -865,6 +935,7 @@ void ClockFacesView::applyTheme()
     const uint32_t halo_accent = is_light ? 0xD97757 : 0x2DD4BF;
     const uint32_t halo_tip    = is_light ? 0xC84B28 : 0x7DD3FC;
 
+    lv_obj_set_style_bg_color(_halo.page, lv_color_hex(theme.background), 0);
     lv_obj_set_style_bg_color(_halo.sec_halo, lv_color_hex(halo_accent), 0);
     lv_obj_set_style_bg_color(_halo.sec_dot, lv_color_hex(halo_tip), 0);
     lv_obj_set_style_text_color(_halo.date_label, lv_color_hex(theme.textSecondary), 0);
@@ -885,6 +956,7 @@ void ClockFacesView::applyTheme()
     const uint32_t spot_sky_bdr = is_light ? 0xDFCC92 : 0x1E3A4C;
     const uint32_t spot_arc_bg  = is_light ? 0xE2D29E : 0x1B2632;
 
+    lv_obj_set_style_bg_color(_spot.page, lv_color_hex(theme.background), 0);
     lv_obj_set_style_arc_color(_spot.sky_arc, lv_color_hex(spot_arc_bg), LV_PART_MAIN);
     lv_obj_set_style_arc_color(_spot.sky_arc, lv_color_hex(spot_accent), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(_spot.dome, lv_color_hex(spot_sky_bg), 0);
@@ -908,7 +980,7 @@ void ClockFacesView::applyTheme()
     const uint32_t vermilion    = is_light ? 0xD64933 : 0xFF6B4A;
     const uint32_t lume_col     = is_light ? 0xFCF4D4 : 0x101820;
 
-    lv_obj_set_style_bg_color(_bauhaus.dial_plate, lv_color_hex(dial_bg), 0);
+    lv_obj_set_style_bg_color(_bauhaus.page, lv_color_hex(dial_bg), 0);
     lv_obj_set_style_border_color(_bauhaus.outer_ring, lv_color_hex(theme.border), 0);
 
     for (int i = 0; i < 60; ++i) {
@@ -942,13 +1014,60 @@ void ClockFacesView::applyTheme()
     lv_obj_set_style_bg_color(_bauhaus.cap_inner, lv_color_hex(vermilion), 0);
 
     refresh_indicator_visuals(!_ind_dimmed);
-    _last_sec = -1;
+    _last_poll_ms = 0;
+    _last_sec     = -1;
     _last_weather_sig.clear();
 }
 
 /* -------------------------------------------------------------------------- */
 /*                               Live Updates                                 */
 /* -------------------------------------------------------------------------- */
+
+void ClockFacesView::update_single_face(int idx, const TimeHms& t, const DateYmd& d, int wday,
+                                        const weather::Snapshot& w, bool refresh_meta)
+{
+    switch (idx) {
+    case 0:
+        update_echo_time(t);
+        break;
+    case 1:
+        update_echo_halo(t, d, wday, w, refresh_meta);
+        break;
+    case 2:
+        update_echo_spot(t, d, wday, w, refresh_meta);
+        break;
+    case 3:
+        update_bauhaus(t, d, wday, w, refresh_meta);
+        break;
+    default:
+        break;
+    }
+}
+
+void ClockFacesView::flush_dirty_faces_for_scroll()
+{
+    bool any_dirty = false;
+    for (int i = 0; i < kFaceCount; ++i) {
+        if (_face_sec_dirty[i] || _face_meta_dirty[i]) {
+            any_dirty = true;
+            break;
+        }
+    }
+    if (!any_dirty) {
+        return;
+    }
+
+    const auto t   = GetHAL().getTimeHms();
+    const auto d   = GetHAL().getDateYmd();
+    const int wday = compute_weekday(d.year, d.month, d.day);
+    for (int i = 0; i < kFaceCount; ++i) {
+        if (_face_sec_dirty[i] || _face_meta_dirty[i]) {
+            update_single_face(i, t, d, wday, _cached_weather, _face_meta_dirty[i]);
+            _face_sec_dirty[i]  = false;
+            _face_meta_dirty[i] = false;
+        }
+    }
+}
 
 void ClockFacesView::update(bool force)
 {
@@ -957,37 +1076,67 @@ void ClockFacesView::update(bool force)
         force = true;
     }
 
+    if (_pager_scrolling && !force) {
+        return;
+    }
+
     const uint32_t now_ms = GetHAL().millis();
     if (!_ind_dimmed && (now_ms - _last_interact_ms >= 2200) && !_scroller) {
         refresh_indicator_visuals(false);
-    } else if (!_ind_dimmed && _scroller && !lv_obj_is_scrolling(_scroller) && (now_ms - _last_interact_ms >= 2200)) {
+    } else if (!_ind_dimmed && _scroller && !_vert_scrolling && !lv_obj_is_scrolling(_scroller) &&
+               (now_ms - _last_interact_ms >= 2200)) {
         refresh_indicator_visuals(false);
     }
 
-    weather::tick();
-    const auto w = weather::snapshot();
-    const auto t = GetHAL().getTimeHms();
-    const auto d = GetHAL().getDateYmd();
+    if (!force && (now_ms - _last_poll_ms < 50)) {
+        return;
+    }
+    _last_poll_ms = now_ms;
 
+    const auto t           = GetHAL().getTimeHms();
+    const bool sec_changed = force || (static_cast<int>(t.second) != _last_sec);
+    if (!sec_changed && !_face_sec_dirty[_active_face] && !_face_meta_dirty[_active_face]) {
+        return;
+    }
+
+    weather::tick();
+    _cached_weather   = weather::snapshot();
+    const auto& w     = _cached_weather;
+    const auto d      = GetHAL().getDateYmd();
     std::string w_sig = fmt::format("{}|{}|{}|{}|{}", w.valid ? 1 : 0, w.tempDisplay, w.condition, w.windText,
                                     w.aqiValue);
 
-    const bool sec_changed  = force || (static_cast<int>(t.second) != _last_sec);
     const bool min_changed  = force || (static_cast<int>(t.minute) != _last_min) ||
                               (static_cast<int>(t.hour) != _last_hour);
     const bool date_changed = force || (d.year != _last_year) || (d.month != _last_month) || (d.day != _last_day);
     const bool w_changed    = force || (w_sig != _last_weather_sig);
+    const bool meta_changed = force || min_changed || date_changed || w_changed;
 
-    if (!sec_changed && !min_changed && !date_changed && !w_changed) {
-        return;
+    for (int i = 0; i < kFaceCount; ++i) {
+        if (sec_changed) {
+            _face_sec_dirty[i] = true;
+        }
+        if (meta_changed) {
+            _face_meta_dirty[i] = true;
+        }
     }
 
     const int wday = compute_weekday(d.year, d.month, d.day);
 
-    update_echo_time(t);
-    update_echo_halo(t, d, wday, w, force || min_changed || date_changed || w_changed);
-    update_echo_spot(t, d, wday, w, force || min_changed || date_changed || w_changed);
-    update_bauhaus(t, d, wday, w, force || min_changed || date_changed || w_changed);
+    if (force || _vert_scrolling) {
+        for (int i = 0; i < kFaceCount; ++i) {
+            if (_face_sec_dirty[i] || _face_meta_dirty[i]) {
+                update_single_face(i, t, d, wday, w, _face_meta_dirty[i]);
+                _face_sec_dirty[i]  = false;
+                _face_meta_dirty[i] = false;
+            }
+        }
+    } else {
+        const int act = std::clamp(_active_face, 0, kFaceCount - 1);
+        update_single_face(act, t, d, wday, w, _face_meta_dirty[act]);
+        _face_sec_dirty[act]  = false;
+        _face_meta_dirty[act] = false;
+    }
 
     _last_sec         = t.second;
     _last_min         = t.minute;

@@ -620,15 +620,31 @@ void Hal::touchpad_init()
 
 Hal::TouchPoint Hal::getTouchPoint()
 {
-    Hal::TouchPoint point;
-    if (_cst820 && _cst820->read()) {
+    static Hal::TouchPoint _last_valid_point;
+    static uint8_t _i2c_fail_streak = 0;
+
+    if (!_cst820) {
+        return {};
+    }
+    if (_cst820->read()) {
+        _i2c_fail_streak = 0;
+        Hal::TouchPoint point;
         point.num = _cst820->getFingerNum();
         if (point.num > 0) {
             point.x = _cst820->getX();
             point.y = _cst820->getY();
         }
+        _last_valid_point = point;
+        return point;
     }
-    return point;
+
+    // Hold last valid touch state across brief I2C bus contention so LVGL
+    // never sees a false finger release (LV_INDEV_STATE_REL) mid-swipe.
+    if (++_i2c_fail_streak <= 3) {
+        return _last_valid_point;
+    }
+    _last_valid_point = {};
+    return {};
 }
 
 /* -------------------------------------------------------------------------- */
@@ -639,12 +655,14 @@ Hal::TouchPoint Hal::getTouchPoint()
 #include <cstring>  // for memset
 #include <lvgl.h>
 
-#define LV_BUFFER_LINE 120
+// ~96 lines ≈ 20% of 466px / ~87 KB in SPIRAM. Below ~10% (e.g. 32 lines) the
+// partial-tile count dominates; 10–25% is the Espressif/Seeed sweet spot. Keep
+// the buffer in PSRAM so internal SRAM stays free for Wi-Fi / mbedTLS / sync objs.
+#define LV_BUFFER_LINE 96
 
-static void lvgl_tick_timer(void *arg)
+static uint32_t lvgl_tick_get_cb(void)
 {
-    (void)arg;
-    lv_tick_inc(5);
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
 }
 
 static void lvgl_rtos_task(void *pvParameter)
@@ -664,7 +682,7 @@ static void lvgl_rtos_task(void *pvParameter)
             }
             xSemaphoreGive(xGuiSemaphore);
         }
-        uint32_t delay_ms = uitk::clamp(time_till_next, 1U, 15U);
+        uint32_t delay_ms = uitk::clamp(time_till_next, 1U, 10U);
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
 }
@@ -752,10 +770,16 @@ void Hal::lvgl_init()
     lv_display_set_driver_data(disp, _display.get());
     lv_display_set_flush_cb(disp, lvgl_flush_cb);
 
-    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, _display->width() * LV_BUFFER_LINE * sizeof(lv_color_t),
-                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    // Single SPIRAM partial buffer. Flush is synchronous, so a 2nd buffer adds no
+    // DMA overlap; stay in PSRAM to avoid starving Wi-Fi / mbedTLS internal heap.
+    const size_t buf_size = _display->width() * LV_BUFFER_LINE * sizeof(lv_color_t);
+    static uint8_t *buf1  = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    if (buf1 == nullptr) {
+        mclog::tagError(_tag, "lvgl draw buf alloc failed ({} B)", buf_size);
+        return;
+    }
+    mclog::tagInfo(_tag, "lvgl draw buf in SPIRAM ({} lines, {} B)", LV_BUFFER_LINE, buf_size);
+    lv_display_set_buffers(disp, (void *)buf1, nullptr, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     lvTouchpad = lv_indev_create();
     LV_ASSERT_MALLOC(lvTouchpad);
@@ -767,15 +791,14 @@ void Hal::lvgl_init()
     lv_indev_set_type(lvTouchpad, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(lvTouchpad, lvgl_read_cb);
     lv_indev_set_display(lvTouchpad, disp);
+    lv_indev_set_scroll_limit(lvTouchpad, 14);
+    lv_indev_set_scroll_throw(lvTouchpad, 7);
     if (lv_timer_t *indev_timer = lv_indev_get_read_timer(lvTouchpad)) {
-        lv_timer_set_period(indev_timer, 10);
+        lv_timer_set_period(indev_timer, 8);
     }
 
-    xGuiSemaphore                                     = xSemaphoreCreateMutex();
-    const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
-    esp_timer_handle_t periodic_timer;
-    ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 5 * 1000));
+    xGuiSemaphore = xSemaphoreCreateMutex();
+    lv_tick_set_cb(lvgl_tick_get_cb);
     xTaskCreatePinnedToCore(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 5, NULL, 1);
 
     startLvglUpdate();

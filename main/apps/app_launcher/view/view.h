@@ -30,6 +30,8 @@ public:
     std::function<void()> onStatusBarClicked;
 
     void init(std::vector<mooncake::AppProps_t> appProps);
+    void pollInput();
+    bool hasPendingImmediateWork() const;
     void update();
 
     bool isOnClockPage() const;
@@ -58,16 +60,28 @@ private:
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Container>> _app_cards;
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Container>> _icon_badges;
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Image>> _icon_images;
+    std::vector<size_t> _badge_swatch_indices;
     std::unique_ptr<input::KeyManager> _key_manager;
 
-    int _clicked_app_id        = -1;
-    uint32_t _last_status_tick = 0;
-    uint32_t _last_anim_tick   = 0;
-    uint8_t _conn_anim_step    = 0;
-    Hal::ThemeMode _last_theme = Hal::ThemeMode::Dark;
+    input::KeyEvent _pending_key_event = input::KeyEvent::None;
+    int _clicked_app_id                = -1;
+    bool _pager_scrolling              = false;
+    uint32_t _last_status_tick         = 0;
+    uint32_t _last_anim_tick           = 0;
+    uint8_t _conn_anim_step            = 0;
+    int _last_orbit_hour               = -1;
+    int _last_orbit_min                = -1;
+    int _last_bat_level                = -1;
+    bool _last_bat_charging            = false;
+    int _last_wifi_state_key           = -1;
+    Hal::ThemeMode _last_theme         = Hal::ThemeMode::Dark;
+    uint16_t* _light_grad_lut          = nullptr;
 
-    void update_status_info();
+    void ensure_light_grad_lut();
+    void update_status_info(bool force = false);
     void apply_theme();
+    static void desktop_cover_check_cb(lv_event_t* e);
+    static void desktop_draw_main_cb(lv_event_t* e);
 };
 
 /**

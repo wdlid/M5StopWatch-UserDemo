@@ -3,24 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>主页 · 方案 B 环形轨道 Demo</title>
+  <title>主页 · 马卡龙配色双模式预览 Demo</title>
   <style>
     :root {
-      --bg: #F5F0E8;
-      --card: #FFFFFF;
-      --card-border: #E8E2D8;
-      --text: #2C2825;
-      --text-secondary: #6B645C;
-      --text-muted: #A39B91;
-      --status-primary: #3D3833;
-      --pill-bg: #FFFFFF;
       --screen: 466px;
-      --pastel-0: #E4F1E8;
-      --pastel-1: #F9E9DC;
-      --pastel-2: #E5EEF8;
-      --pastel-3: #ECE6F6;
-      --pastel-4: #F7ECDF;
-      --pastel-5: #E3F0EA;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,17 +14,17 @@
     body {
       min-height: 100vh;
       background:
-        radial-gradient(ellipse at 20% 0%, #2a3140 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 100%, #1a222e 0%, transparent 45%),
+        radial-gradient(ellipse at 18% 0%, #2a3142 0%, transparent 52%),
+        radial-gradient(ellipse at 82% 100%, #1c2230 0%, transparent 48%),
         #0d1017;
       color: #e8ecf2;
       font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      padding: 32px 24px 64px;
+      padding: 32px 24px 72px;
     }
 
     .page-header {
-      max-width: 900px;
-      margin: 0 auto 28px;
+      max-width: 1040px;
+      margin: 0 auto 26px;
       text-align: center;
     }
 
@@ -50,9 +36,11 @@
     }
 
     .page-header p {
-      color: #8b95a8;
+      color: #939db2;
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.6;
+      max-width: 760px;
+      margin: 0 auto;
     }
 
     .tabs {
@@ -60,43 +48,194 @@
       flex-wrap: wrap;
       gap: 8px;
       justify-content: center;
-      margin-top: 20px;
+      margin-top: 18px;
     }
 
-    .tabs a {
+    .tabs a, .toolbar-btn {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 8px 16px;
+      padding: 8px 15px;
       border-radius: 999px;
-      border: 1px solid #3a4254;
-      background: #1a1f2b;
-      color: #c5ccd8;
+      border: 1px solid #353d4f;
+      background: #181d28;
+      color: #c7cfdc;
       text-decoration: none;
       font-size: 13px;
       font-weight: 600;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
     }
 
-    .tabs a:hover, .tabs a.primary {
-      background: #252b3a;
-      border-color: #5a6578;
+    .tabs a:hover, .toolbar-btn:hover {
+      background: #232a39;
+      border-color: #56627a;
       color: #fff;
     }
 
-    .tabs a.primary {
-      border-color: #6a9b7c;
-      background: #1e2a24;
-      color: #a8e0bc;
+    .tabs a.primary, .toolbar-btn.active {
+      border-color: #79b493;
+      background: #1d2c25;
+      color: #b4ebd0;
     }
 
+    /* Macaron Palette Studio Panel */
+    .palette-panel {
+      max-width: 1120px;
+      margin: 0 auto 38px;
+      padding: 22px 24px;
+      border-radius: 22px;
+      background: rgba(22, 27, 38, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(10px);
+    }
+
+    .palette-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .palette-top h3 {
+      font-size: 15px;
+      font-weight: 650;
+      color: #eef2f8;
+    }
+
+    .palette-top .hint {
+      font-size: 12.5px;
+      color: #8f9bb0;
+    }
+
+    .preset-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .palette-groups {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 16px;
+    }
+
+    .palette-group {
+      background: rgba(13, 16, 23, 0.55);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      padding: 14px 16px;
+    }
+
+    .group-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #aab4c6;
+      margin-bottom: 12px;
+    }
+
+    .group-label span.tag-warm { color: #f8c8dc; }
+    .group-label span.tag-cool { color: #bfe0f5; }
+
+    .swatch-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .swatch-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 11px;
+      border-radius: 13px;
+      background: #171c26;
+      border: 1px solid #2b3344;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.12s, background 0.15s;
+      min-width: 192px;
+      flex: 1 1 192px;
+    }
+
+    .swatch-chip:hover {
+      border-color: #637089;
+      background: #1e2432;
+      transform: translateY(-1px);
+    }
+
+    .swatch-chip.in-use {
+      border-color: rgba(180, 235, 208, 0.55);
+    }
+
+    .dual-dots {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .dot-light, .dot-dark {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+    }
+
+    .dot-light {
+      border: 1.5px solid rgba(0, 0, 0, 0.14);
+      z-index: 2;
+    }
+
+    .dot-dark {
+      margin-left: -9px;
+      border: 1.5px solid rgba(255, 255, 255, 0.22);
+      box-shadow: -2px 0 6px rgba(0, 0, 0, 0.45);
+    }
+
+    .swatch-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .swatch-name {
+      font-size: 12.5px;
+      font-weight: 650;
+      color: #edf1f7;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch-app-tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #cbd5e6;
+    }
+
+    .swatch-hex {
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #8b96ab;
+    }
+
+    /* Watch Gallery */
     .gallery {
       display: flex;
       flex-wrap: wrap;
-      gap: 48px 40px;
+      gap: 48px 42px;
       justify-content: center;
       align-items: flex-start;
-      max-width: 1400px;
+      max-width: 1520px;
       margin: 0 auto;
     }
 
@@ -110,7 +249,7 @@
 
     .demo-meta {
       text-align: center;
-      max-width: 320px;
+      max-width: 360px;
     }
 
     .demo-meta h2 {
@@ -125,14 +264,15 @@
       font-weight: 700;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      padding: 3px 8px;
+      padding: 3px 9px;
       border-radius: 6px;
       margin-bottom: 8px;
     }
 
-    .demo-meta .badge.selected { background: #24352c; color: #8fd4a8; }
-    .demo-meta .badge.ref { background: #3d2a2a; color: #f0a8a8; }
-    .demo-meta .badge.icons { background: #2a3040; color: #9eb6e0; }
+    .demo-meta .badge.light-mode { background: #3b3120; color: #ffe39e; }
+    .demo-meta .badge.dark-mode  { background: #23293d; color: #b8c8ff; }
+    .demo-meta .badge.all9       { background: #34263b; color: #e6b8f5; }
+    .demo-meta .badge.icons      { background: #213430; color: #9ee0c5; }
 
     .demo-meta p {
       color: #8b95a8;
@@ -152,6 +292,19 @@
     }
 
     .screen {
+      /* Default: Firmware Light Theme (Warm Paper #F7E9B8) */
+      --bg: #F7E9B8;
+      --card: #FCF4D4;
+      --card-border: #E4D39B;
+      --hub-bg: rgba(252, 244, 212, 0.72);
+      --text: #1F1C14;
+      --text-secondary: #6B624C;
+      --text-muted: #9B9076;
+      --status-primary: #2B261B;
+      --wifi-ok: #2D6A4F;
+      --bat-fill: #2D6A4F;
+      --badge-shadow: 0 4px 14px rgba(43, 38, 27, 0.10);
+
       position: relative;
       width: var(--screen);
       height: var(--screen);
@@ -161,6 +314,34 @@
       box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
       color: var(--text);
       user-select: none;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+
+    .screen.paper-ivory {
+      --bg: #F5F0E8;
+      --card: #FFFFFF;
+      --card-border: #E5DEC9;
+      --hub-bg: rgba(255, 255, 255, 0.72);
+      --text: #2C2825;
+      --text-secondary: #6B645C;
+      --text-muted: #A39B91;
+      --status-primary: #3D3833;
+    }
+
+    .screen.theme-dark {
+      /* Firmware Dark Theme (AMOLED #000000) */
+      --bg: #000000;
+      --card: #1B1F24;
+      --card-border: #2A3038;
+      --hub-bg: #1B1F24;
+      --text: #FFFFFF;
+      --text-secondary: #8FA0B0;
+      --text-muted: #5A6570;
+      --status-primary: #C8D6E5;
+      --wifi-ok: #4AD78C;
+      --bat-fill: #2D6A4F;
+      --badge-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+      box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.10);
     }
 
     .drag-handle {
@@ -172,7 +353,7 @@
       height: 4px;
       border-radius: 2px;
       background: var(--text-muted);
-      opacity: 0.55;
+      opacity: 0.7;
     }
 
     .status-bar {
@@ -197,46 +378,18 @@
       height: 28px;
       width: 82px;
       border-radius: 14px;
-      background: var(--pill-bg);
+      background: var(--card);
       border: 1px solid var(--card-border);
       font-size: 12px;
       font-weight: 600;
-      color: var(--text-secondary);
+      color: var(--status-primary);
     }
 
     .pill.wifi { left: 0; }
+    .pill.wifi .wifi-ico { color: var(--wifi-ok); }
     .pill.bat { right: 0; color: var(--status-primary); }
-    .status-time {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text);
-    }
     .wifi-ico, .bat-ico { display: inline-flex; width: 14px; height: 14px; }
     .wifi-ico svg, .bat-ico svg { width: 100%; height: 100%; }
-
-    /* Current cards */
-    .layout-current {
-      position: absolute;
-      inset: 82px 0 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      padding: 14px 38px 28px;
-    }
-    .card-row { display: flex; gap: 10px; justify-content: center; }
-    .app-card {
-      width: 190px; height: 74px; border-radius: 18px;
-      background: var(--card); border: 1px solid var(--card-border);
-      display: flex; align-items: center; padding: 0 8px; gap: 10px;
-    }
-    .app-card .badge-sq {
-      width: 52px; height: 52px; border-radius: 14px;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-    }
-    .app-card .badge-sq svg { width: 34px; height: 34px; }
-    .app-card .name { font-size: 15px; font-weight: 650; }
 
     /* Orbit */
     .layout-orbit { position: absolute; inset: 0; }
@@ -244,63 +397,117 @@
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%, -50%);
       width: 108px; height: 108px; border-radius: 50%;
-      background: rgba(255, 255, 255, 0.55);
-      border: 1px solid rgba(232, 226, 216, 0.9);
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+      background: var(--hub-bg);
+      border: 1px solid var(--card-border);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
       z-index: 2; backdrop-filter: blur(6px);
     }
     .orbit-center .big-time {
-      font-size: 28px; font-weight: 700; letter-spacing: -0.03em; color: var(--text); line-height: 1;
+      font-size: 26px; font-weight: 700; letter-spacing: -0.03em; color: var(--text); line-height: 1;
     }
     .orbit-center .sub {
-      font-size: 11px; font-weight: 600; color: var(--text-muted);
-      letter-spacing: 0.06em; text-transform: uppercase;
+      font-size: 10px; font-weight: 650; color: var(--text-muted);
+      letter-spacing: 0.05em; text-transform: uppercase;
     }
+
     .orbit-item {
       position: absolute; top: 50%; left: 50%;
-      width: 86px; margin-left: -43px; margin-top: -43px;
-      height: 86px;
+      width: 86px; height: 86px;
+      margin-left: -43px; margin-top: -43px;
       display: flex; align-items: center; justify-content: center;
       cursor: pointer; z-index: 3;
-      transition: transform 0.14s ease;
     }
-    .orbit-item:active { transform: scale(0.92); }
+
     .orbit-icon {
       width: 86px; height: 86px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 16px rgba(44, 40, 37, 0.1);
+      background: var(--badge-bg);
+      border: 1px solid var(--badge-border);
+      box-shadow: var(--badge-shadow);
+      transition: transform 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+      position: relative;
     }
-    .orbit-icon svg { width: 72px; height: 72px; }
+
+    .orbit-item:hover .orbit-icon {
+      transform: scale(1.04);
+    }
+
+    .orbit-item:active .orbit-icon {
+      transform: scale(0.93);
+      background: var(--badge-pressed) !important;
+    }
+
+    .orbit-item.selected-slot .orbit-icon {
+      box-shadow: 0 0 0 3px #ffffff, 0 0 0 6px #4AD78C, var(--badge-shadow);
+    }
+
+    .orbit-icon svg { width: 72px; height: 72px; pointer-events: none; }
+
+    /* 9-color ring variant */
+    .orbit-item.compact-9 {
+      width: 68px; height: 68px;
+      margin-left: -34px; margin-top: -34px;
+    }
+    .orbit-item.compact-9 .orbit-icon {
+      width: 68px; height: 68px;
+    }
+    .orbit-item.compact-9 .orbit-icon svg {
+      width: 54px; height: 54px;
+    }
+    .orbit-swatch-label {
+      position: absolute;
+      bottom: -17px;
+      white-space: nowrap;
+      font-size: 10px;
+      font-weight: 650;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.52);
+      color: #f3f6fb;
+      pointer-events: none;
+    }
+    .screen:not(.theme-dark) .orbit-swatch-label {
+      background: rgba(255, 255, 255, 0.78);
+      color: #2b261b;
+    }
 
     /* Icon strip panel */
     .icon-strip-screen {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 28px; padding: 72px 36px 40px; height: 100%;
+      gap: 20px; padding: 74px 34px 36px; height: 100%;
     }
     .icon-strip-title {
-      font-size: 15px; font-weight: 700; color: var(--text-secondary); letter-spacing: 0.04em;
+      font-size: 13px; font-weight: 700; color: var(--text-secondary); letter-spacing: 0.06em;
     }
     .icon-row {
-      display: flex; flex-wrap: wrap; gap: 18px 22px; justify-content: center; max-width: 340px;
+      display: flex; flex-wrap: wrap; gap: 14px 20px; justify-content: center; max-width: 340px;
     }
     .icon-chip {
-      display: flex; flex-direction: column; align-items: center; gap: 8px; width: 88px;
+      display: flex; flex-direction: column; align-items: center; gap: 6px; width: 86px;
     }
     .icon-chip .orb {
-      width: 86px; height: 86px; border-radius: 50%;
+      width: 80px; height: 80px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 14px rgba(44, 40, 37, 0.08);
+      border: 1px solid var(--badge-border);
+      box-shadow: var(--badge-shadow);
     }
-    .icon-chip .orb svg { width: 72px; height: 72px; }
-    .icon-chip span { font-size: 12px; font-weight: 650; color: var(--text); }
+    .icon-chip .orb svg { width: 66px; height: 66px; }
+    .icon-chip span { font-size: 11.5px; font-weight: 650; color: var(--text); }
 
     .footer-note {
-      max-width: 720px; margin: 48px auto 0; text-align: center;
-      color: #6a7388; font-size: 12px; line-height: 1.6;
+      max-width: 780px; margin: 48px auto 0; text-align: center;
+      color: #778299; font-size: 12.5px; line-height: 1.7;
+    }
+    .footer-note code {
+      color: #b7c3d9;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 6px;
+      border-radius: 5px;
     }
 
-    @media (max-width: 540px) {
+    @media (max-width: 560px) {
       body { padding: 20px 12px 48px; }
+      .palette-groups { grid-template-columns: 1fr; }
       .watch-shell { transform: scale(0.72); transform-origin: top center; }
       .demo-card { margin-bottom: -80px; }
     }
@@ -308,58 +515,104 @@
 </head>
 <body>
   <header class="page-header">
-    <h1>方案 B · 环形轨道 + 新图标</h1>
-    <p>已选定落地方向。下方可对比现状、环形桌面，以及统一重绘后的图标条。</p>
+    <h1>主界面 App 马卡龙配色 · 浅色 / 深色双模式预览</h1>
+    <p>
+      浅色模式直接采用马卡龙原色表（搭配同色系微边框提升暖纸底辨识度）；<br />
+      深色模式采用同色相降亮度的<strong>「暮色丝绒马卡龙」</strong>（降低约 50% 发光亮度抑制纯黑 AMOLED 眩光，同时与 <code>#3A3530</code> 炭黑图标保持 3.3:1–6.3:1 清晰对比度）。
+    </p>
     <nav class="tabs">
-      <a class="primary" href="#demo-b">方案 B</a>
-      <a href="#demo-icons">新图标</a>
-      <a href="#demo-current">现状对照</a>
+      <a class="primary" href="#demo-light">浅色模式</a>
+      <a href="#demo-dark">深色模式</a>
+      <a href="#demo-all9">9 色全览环</a>
+      <a href="#demo-icons">图标矩阵</a>
     </nav>
   </header>
 
+  <section class="palette-panel">
+    <div class="palette-top">
+      <div>
+        <h3>马卡龙 9 色对照表 &amp; 实时换色预览</h3>
+        <div class="hint" id="interactive-hint">点击表盘上的任意 App 图标选中槽位，再点下方色卡即可实时试色（按住图标可预览按下态颜色）。</div>
+      </div>
+      <div class="preset-bar">
+        <button class="toolbar-btn active" data-preset="balanced">默认精选 (上3暖 + 下3冷)</button>
+        <button class="toolbar-btn" data-preset="rich">浓郁对比组 (含玫瑰粉/莓果紫)</button>
+        <button class="toolbar-btn" data-preset="warm">偏暖甜点组</button>
+        <button class="toolbar-btn" data-preset="cool">清爽冷色组</button>
+        <button class="toolbar-btn" id="toggle-paper-btn">浅色底：固件暖纸 #F7E9B8</button>
+      </div>
+    </div>
+
+    <div class="palette-groups">
+      <div class="palette-group">
+        <div class="group-label">
+          <span class="tag-warm">● 暖色系 WARM MACARONS（4 色）</span>
+          <span>左：浅色原色 / 右：深色丝绒</span>
+        </div>
+        <div class="swatch-list" id="warm-swatches"></div>
+      </div>
+      <div class="palette-group">
+        <div class="group-label">
+          <span class="tag-cool">● 冷色系 COOL MACARONS（5 色）</span>
+          <span>左：浅色原色 / 右：深色丝绒</span>
+        </div>
+        <div class="swatch-list" id="cool-swatches"></div>
+      </div>
+    </div>
+  </section>
+
   <div class="gallery">
-    <section class="demo-card" id="demo-b">
+    <section class="demo-card" id="demo-light">
       <div class="watch-shell">
-        <div class="screen" data-layout="orbit"></div>
+        <div class="screen" id="screen-light" data-layout="orbit" data-mode="light"></div>
       </div>
       <div class="demo-meta">
-        <span class="badge selected">Selected</span>
-        <h2>方案 B · 环形轨道</h2>
-        <p>六个应用绕中心时间环绕。圆标 + 短标签；状态栏不再叠时间，时间只在中心 hub 显示。</p>
+        <span class="badge light-mode">Light Mode · 浅色马卡龙</span>
+        <h2>浅色模式 · 环形桌面</h2>
+        <p>上半环暖色（奶油柠檬黄 → 草莓牛奶粉 → 蜜桃橘），下半环冷色（天空蓝 → 薰衣草紫 → 薄荷绿），色彩与每个图标自带点缀色一一呼应。</p>
+      </div>
+    </section>
+
+    <section class="demo-card" id="demo-dark">
+      <div class="watch-shell">
+        <div class="screen theme-dark" id="screen-dark" data-layout="orbit" data-mode="dark"></div>
+      </div>
+      <div class="demo-meta">
+        <span class="badge dark-mode">Dark Mode · 暮色丝绒马卡龙</span>
+        <h2>深色模式 · 环形桌面</h2>
+        <p>在 <code>#000000</code> 纯黑表盘上保持色相一致，明度收束至柔和丝绒釉感，既不刺眼，又让炭黑描边与奶油内盘层次分明。</p>
+      </div>
+    </section>
+
+    <section class="demo-card" id="demo-all9">
+      <div class="watch-shell">
+        <div class="screen theme-dark" id="screen-all9" data-layout="orbit9" data-mode="dark"></div>
+      </div>
+      <div class="demo-meta">
+        <span class="badge all9">All 9 Colors · 全色卡上盘</span>
+        <h2>9 色全览 · <button class="toolbar-btn" id="toggle-all9-mode" style="padding:2px 10px;font-size:11px;">切换浅色/深色</button></h2>
+        <p>展示全部 9 款马卡龙色（4 暖 + 5 冷）同时排布在环形轨道上的整体和谐度。</p>
       </div>
     </section>
 
     <section class="demo-card" id="demo-icons">
       <div class="watch-shell">
-        <div class="screen" data-layout="icons"></div>
+        <div class="screen" id="screen-icons" data-layout="icons" data-mode="light"></div>
       </div>
       <div class="demo-meta">
-        <span class="badge icons">Icon Set</span>
-        <h2>统一图标语言</h2>
-        <p>炭黑主体 + 柔和强调色 + 奶油内填。六个应用图标已统一到同一套语言（含 Gemini 星芒）。</p>
-      </div>
-    </section>
-
-    <section class="demo-card" id="demo-current">
-      <div class="watch-shell">
-        <div class="screen" data-layout="current"></div>
-      </div>
-      <div class="demo-meta">
-        <span class="badge ref">Before</span>
-        <h2>现状 · 方卡对照</h2>
-        <p>旧 2×3 长方形卡片（此处已套用新图标，方便只比布局差异）。</p>
+        <span class="badge icons">Icon Set · 图标与底色配对</span>
+        <h2>图标细节 · <button class="toolbar-btn" id="toggle-icons-mode" style="padding:2px 10px;font-size:11px;">切换浅色/深色</button></h2>
+        <p>6 款应用图标在浅色马卡龙与深色丝绒底盘上的近景可读性对比。</p>
       </div>
     </section>
   </div>
 
   <p class="footer-note">
-    固件侧已改：<code>main/apps/app_launcher/view/</code> 环形布局 +
-    <code>main/assets/images/src/icon_*.svg</code> 重绘栅格。<br />
-    本地预览：直接打开本 HTML。
+    固件代码已同步更新：<code>main/apps/app_launcher/view/view.cpp</code>（支持深浅色自动切换及按下态同色系反馈）。<br />
+    本地预览：在浏览器直接打开 <code>sim/launcher_demos.html</code>。
   </p>
 
   <script>
-    /* Unified soft icons (except Gemini official spark) */
     const SVG = {
       gemini: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill="#3A3530" d="M30.6 7.2c.5-1.5 2.6-1.5 3.1 0l1.6 4.7c1.9 5.5 6.2 9.8 11.7 11.7l4.7 1.6c1.5.5 1.5 2.6 0 3.1l-4.7 1.6c-5.5 1.9-9.8 6.2-11.7 11.7l-1.6 4.7c-.5 1.5-2.6 1.5-3.1 0l-1.6-4.7c-1.9-5.5-6.2-9.8-11.7-11.7l-4.7-1.6c-1.5-.5-1.5-2.6 0-3.1l4.7-1.6c5.5-1.9 9.8-6.2 11.7-11.7l1.6-4.7z"/><circle cx="32" cy="32" r="7.5" fill="#F7F3EC"/><circle cx="32" cy="32" r="3.4" fill="#5B8DEF"/><circle cx="32" cy="14" r="2.2" fill="#5B8DEF"/><circle cx="32" cy="50" r="2.2" fill="#5B8DEF"/><circle cx="14" cy="32" r="2.2" fill="#5B8DEF"/><circle cx="50" cy="32" r="2.2" fill="#5B8DEF"/></svg>`,
       clock: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="32" cy="34" r="18" fill="#3A3530"/><circle cx="32" cy="34" r="14.5" fill="#F7F3EC"/><path d="M32 23.5v11.5l7 4" stroke="#3A3530" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="34" r="2.2" fill="#E07A5F"/><path d="M18 18.5c0-3.2 2.2-6 5.5-6.8" stroke="#3A3530" stroke-width="2.8" stroke-linecap="round"/><path d="M46 18.5c0-3.2-2.2-6-5.5-6.8" stroke="#3A3530" stroke-width="2.8" stroke-linecap="round"/><circle cx="19.5" cy="17.5" r="3.2" fill="#E07A5F"/><circle cx="44.5" cy="17.5" r="3.2" fill="#E07A5F"/><path d="M22 50.5l-3 4.5M42 50.5l3 4.5" stroke="#3A3530" stroke-width="2.8" stroke-linecap="round"/></svg>`,
@@ -368,21 +621,89 @@
       imu: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="32" cy="32" r="18" fill="#3A3530"/><circle cx="32" cy="32" r="14.5" fill="#F7F3EC"/><ellipse cx="32" cy="32" rx="20" ry="8" stroke="#3A3530" stroke-width="2.2" opacity="0.35"/><ellipse cx="32" cy="32" rx="8" ry="20" stroke="#3A3530" stroke-width="2.2" opacity="0.35"/><circle cx="32" cy="10" r="3" fill="#5A9A7B"/><circle cx="32" cy="54" r="3" fill="#5A9A7B"/><circle cx="10" cy="32" r="3" fill="#5A9A7B"/><circle cx="54" cy="32" r="3" fill="#5A9A7B"/><circle cx="32" cy="32" r="5" fill="#3A3530"/><circle cx="32" cy="32" r="2.4" fill="#5A9A7B"/></svg>`,
       gear: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><g transform="translate(32 32)" fill="#3A3530"><circle r="13.5"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(45)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(90)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(135)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(180)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(225)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(270)"/><rect x="-3.6" y="-22.5" width="7.2" height="11" rx="2.8" transform="rotate(315)"/></g><circle cx="32" cy="32" r="9.5" fill="#F7F3EC"/><circle cx="32" cy="32" r="5.8" fill="#3A3530"/><circle cx="32" cy="32" r="2.8" fill="#E8A87C"/></svg>`,
       wifi: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12.5a9 9 0 0 1 14 0"/><path d="M8.5 15.5a4.5 4.5 0 0 1 7 0"/><circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none"/></svg>`,
-      bat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/><rect x="4" y="9" width="12" height="6" rx="1" fill="currentColor" stroke="none" opacity="0.75"/></svg>`,
+      bat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/><rect x="4" y="9" width="13" height="6" rx="1" fill="#2D6A4F" stroke="none"/></svg>`,
+    };
+
+    /* Exact 9-color Macaron table mirrored from view.cpp */
+    const SWATCHES = [
+      {
+        id: "strawberry", group: "warm", name: "草莓牛奶粉",
+        lightBg: "#F8C8DC", lightBorder: "#E6AFC6", lightPressed: "#EBA8C4",
+        darkBg:  "#C88CA6", darkBorder:  "#DBA4BC", darkPressed:  "#A66E87",
+      },
+      {
+        id: "rose", group: "warm", name: "玫瑰粉",
+        lightBg: "#E8A0B8", lightBorder: "#D286A0", lightPressed: "#D684A0",
+        darkBg:  "#B8748D", darkBorder:  "#CC8BA3", darkPressed:  "#96586F",
+      },
+      {
+        id: "peach", group: "warm", name: "蜜桃橘",
+        lightBg: "#FFD3B6", lightBorder: "#ECBA98", lightPressed: "#F2B892",
+        darkBg:  "#CFA082", darkBorder:  "#E2B79B", darkPressed:  "#AD7F62",
+      },
+      {
+        id: "lemon", group: "warm", name: "奶油柠檬黄",
+        lightBg: "#FFF1A8", lightBorder: "#E3CE74", lightPressed: "#F0DC7D",
+        darkBg:  "#D1BE74", darkBorder:  "#E3D28E", darkPressed:  "#AF9C55",
+      },
+      {
+        id: "mint", group: "cool", name: "薄荷绿",
+        lightBg: "#BDE8D5", lightBorder: "#9FD1BB", lightPressed: "#9CD4BC",
+        darkBg:  "#7EBAA2", darkBorder:  "#97CEB8", darkPressed:  "#609982",
+      },
+      {
+        id: "pistachio", group: "cool", name: "开心果绿",
+        lightBg: "#D4E7B0", lightBorder: "#BAD092", lightPressed: "#BDD592",
+        darkBg:  "#9FB878", darkBorder:  "#B5CC90", darkPressed:  "#80985B",
+      },
+      {
+        id: "sky", group: "cool", name: "天空蓝",
+        lightBg: "#BFE0F5", lightBorder: "#A2C9E4", lightPressed: "#9EC8E6",
+        darkBg:  "#82AFCB", darkBorder:  "#9BC4DE", darkPressed:  "#648FA9",
+      },
+      {
+        id: "lavender", group: "cool", name: "薰衣草紫",
+        lightBg: "#D5C6EA", lightBorder: "#BDB0D8", lightPressed: "#BEACDC",
+        darkBg:  "#A190BE", darkBorder:  "#B8A8D3", darkPressed:  "#82719E",
+      },
+      {
+        id: "berry", group: "cool", name: "莓果紫",
+        lightBg: "#B89AD0", lightBorder: "#A081BA", lightPressed: "#A280BE",
+        darkBg:  "#9175AD", darkBorder:  "#A88DC3", darkPressed:  "#73588E",
+      },
+    ];
+
+    const SWATCH_BY_ID = Object.fromEntries(SWATCHES.map((s) => [s.id, s]));
+
+    const PRESETS = {
+      balanced: ["strawberry", "peach", "sky", "lavender", "mint", "lemon"],
+      rich:     ["rose", "peach", "sky", "berry", "mint", "pistachio"],
+      warm:     ["strawberry", "rose", "peach", "lemon", "mint", "lavender"],
+      cool:     ["sky", "lavender", "berry", "mint", "pistachio", "strawberry"],
     };
 
     const APPS = [
-      { name: "Gemini.AI", short: "Gemini", pastel: "var(--pastel-0)", icon: "gemini" },
-      { name: "AlarmClock", short: "Alarm", pastel: "var(--pastel-1)", icon: "clock" },
-      { name: "Stopwatch", short: "Timer", pastel: "var(--pastel-2)", icon: "timer" },
-      { name: "Badge", short: "Badge", pastel: "var(--pastel-3)", icon: "badge" },
-      { name: "IMU", short: "IMU", pastel: "var(--pastel-4)", icon: "imu" },
-      { name: "Settings", short: "Setup", pastel: "var(--pastel-5)", icon: "gear" },
+      { name: "Gemini.AI", short: "Gemini", icon: "gemini", swatchId: "strawberry" },
+      { name: "AlarmClock", short: "Alarm", icon: "clock",  swatchId: "peach" },
+      { name: "Stopwatch",  short: "Timer", icon: "timer",  swatchId: "sky" },
+      { name: "Badge",      short: "Badge", icon: "badge",  swatchId: "lavender" },
+      { name: "IMU",        short: "IMU",   icon: "imu",    swatchId: "mint" },
+      { name: "Settings",   short: "Setup", icon: "gear",   swatchId: "lemon" },
     ];
+
+    let selectedAppIdx = null;
+    let useIvoryPaper = false;
 
     function nowHHMM() {
       const d = new Date();
       return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    }
+
+    function swatchVars(swatch, isDark) {
+      const bg = isDark ? swatch.darkBg : swatch.lightBg;
+      const border = isDark ? swatch.darkBorder : swatch.lightBorder;
+      const pressed = isDark ? swatch.darkPressed : swatch.lightPressed;
+      return `--badge-bg:${bg};--badge-border:${border};--badge-pressed:${pressed};`;
     }
 
     function statusHeaderHTML() {
@@ -390,33 +711,19 @@
         <div class="drag-handle"></div>
         <div class="status-bar">
           <div class="pill wifi"><span class="wifi-ico">${SVG.wifi}</span><span>On</span></div>
-          <div class="pill bat"><span class="bat-ico">${SVG.bat}</span><span>76%</span></div>
+          <div class="pill bat"><span class="bat-ico">${SVG.bat}</span><span>88%</span></div>
         </div>`;
     }
 
-    function buildCurrent(screen) {
-      screen.innerHTML = statusHeaderHTML();
-      const wrap = document.createElement("div");
-      wrap.className = "layout-current";
-      for (let r = 0; r < 3; r++) {
-        const row = document.createElement("div");
-        row.className = "card-row";
-        for (let c = 0; c < 2; c++) {
-          const app = APPS[r * 2 + c];
-          const card = document.createElement("div");
-          card.className = "app-card";
-          card.innerHTML = `<div class="badge-sq" style="background:${app.pastel}">${SVG[app.icon]}</div><div class="name">${app.name}</div>`;
-          row.appendChild(card);
-        }
-        wrap.appendChild(row);
-      }
-      screen.appendChild(wrap);
-    }
-
     function buildOrbit(screen) {
+      const isDark = screen.dataset.mode === "dark";
+      screen.classList.toggle("theme-dark", isDark);
+      screen.classList.toggle("paper-ivory", !isDark && useIvoryPaper);
       screen.innerHTML = statusHeaderHTML();
+
       const wrap = document.createElement("div");
       wrap.className = "layout-orbit";
+
       const center = document.createElement("div");
       center.className = "orbit-center";
       center.innerHTML = `<div class="big-time" data-live-time>${nowHHMM()}</div>`;
@@ -424,44 +731,180 @@
 
       const radius = 165;
       APPS.forEach((app, i) => {
+        const swatch = SWATCH_BY_ID[app.swatchId];
         const angle = -90 + i * (360 / APPS.length);
         const rad = (angle * Math.PI) / 180;
-        const x = Math.cos(rad) * radius;
-        const y = Math.sin(rad) * radius;
+        const x = Math.round(Math.cos(rad) * radius);
+        const y = Math.round(Math.sin(rad) * radius);
+
         const item = document.createElement("div");
-        item.className = "orbit-item";
+        item.className = "orbit-item" + (selectedAppIdx === i ? " selected-slot" : "");
         item.style.transform = `translate(${x}px, ${y}px)`;
-        item.innerHTML = `<div class="orbit-icon" style="background:${app.pastel}">${SVG[app.icon]}</div>`;
+        item.title = `${app.short} · ${swatch.name} (${isDark ? swatch.darkBg : swatch.lightBg})`;
+        item.innerHTML = `<div class="orbit-icon" style="${swatchVars(swatch, isDark)}">${SVG[app.icon]}</div>`;
+        item.addEventListener("click", () => {
+          selectedAppIdx = (selectedAppIdx === i) ? null : i;
+          updateHint();
+          renderAll();
+        });
+        wrap.appendChild(item);
+      });
+      screen.appendChild(wrap);
+    }
+
+    function buildOrbit9(screen) {
+      const isDark = screen.dataset.mode === "dark";
+      screen.classList.toggle("theme-dark", isDark);
+      screen.classList.toggle("paper-ivory", !isDark && useIvoryPaper);
+      screen.innerHTML = statusHeaderHTML();
+
+      const wrap = document.createElement("div");
+      wrap.className = "layout-orbit";
+
+      const center = document.createElement("div");
+      center.className = "orbit-center";
+      center.innerHTML = `<div class="big-time" data-live-time>${nowHHMM()}</div><div class="sub">9 Colors</div>`;
+      wrap.appendChild(center);
+
+      // Color-wheel order for all 9 swatches
+      const wheelOrder = ["strawberry", "rose", "peach", "lemon", "pistachio", "mint", "sky", "lavender", "berry"];
+      const iconsCycle = ["gemini", "clock", "gear", "timer", "imu", "imu", "timer", "badge", "badge"];
+      const radius = 168;
+
+      wheelOrder.forEach((id, i) => {
+        const swatch = SWATCH_BY_ID[id];
+        const angle = -90 + i * (360 / wheelOrder.length);
+        const rad = (angle * Math.PI) / 180;
+        const x = Math.round(Math.cos(rad) * radius);
+        const y = Math.round(Math.sin(rad) * radius);
+
+        const item = document.createElement("div");
+        item.className = "orbit-item compact-9";
+        item.style.transform = `translate(${x}px, ${y}px)`;
+        item.innerHTML = `
+          <div class="orbit-icon" style="${swatchVars(swatch, isDark)}">${SVG[iconsCycle[i]]}</div>
+          <div class="orbit-swatch-label">${swatch.name}</div>`;
         wrap.appendChild(item);
       });
       screen.appendChild(wrap);
     }
 
     function buildIcons(screen) {
+      const isDark = screen.dataset.mode === "dark";
+      screen.classList.toggle("theme-dark", isDark);
+      screen.classList.toggle("paper-ivory", !isDark && useIvoryPaper);
       screen.innerHTML = statusHeaderHTML();
+
       const wrap = document.createElement("div");
       wrap.className = "icon-strip-screen";
-      wrap.innerHTML = `<div class="icon-strip-title">ICON SET</div>`;
+      wrap.innerHTML = `<div class="icon-strip-title">${isDark ? "DARK · VELVET MACARON" : "LIGHT · PASTEL MACARON"}</div>`;
+
       const row = document.createElement("div");
       row.className = "icon-row";
       APPS.forEach((app) => {
+        const swatch = SWATCH_BY_ID[app.swatchId];
         const chip = document.createElement("div");
         chip.className = "icon-chip";
         chip.innerHTML = `
-          <div class="orb" style="background:${app.pastel}">${SVG[app.icon]}</div>
-          <span>${app.short}</span>`;
+          <div class="orb" style="background:${isDark ? swatch.darkBg : swatch.lightBg};${swatchVars(swatch, isDark)}">${SVG[app.icon]}</div>
+          <span>${app.short} · ${swatch.name}</span>`;
         row.appendChild(chip);
       });
       wrap.appendChild(row);
       screen.appendChild(wrap);
     }
 
-    document.querySelectorAll(".screen").forEach((screen) => {
-      const layout = screen.dataset.layout;
-      if (layout === "current") buildCurrent(screen);
-      else if (layout === "orbit") buildOrbit(screen);
-      else if (layout === "icons") buildIcons(screen);
+    function renderSwatches() {
+      const warmWrap = document.getElementById("warm-swatches");
+      const coolWrap = document.getElementById("cool-swatches");
+      warmWrap.innerHTML = "";
+      coolWrap.innerHTML = "";
+
+      SWATCHES.forEach((s) => {
+        const usedBy = APPS.filter((a) => a.swatchId === s.id).map((a) => a.short);
+        const chip = document.createElement("div");
+        chip.className = "swatch-chip" + (usedBy.length ? " in-use" : "");
+        chip.innerHTML = `
+          <div class="dual-dots">
+            <span class="dot-light" style="background:${s.lightBg}" title="浅色 ${s.lightBg}"></span>
+            <span class="dot-dark" style="background:${s.darkBg}" title="深色 ${s.darkBg}"></span>
+          </div>
+          <div class="swatch-info">
+            <div class="swatch-name">
+              <span>${s.name}</span>
+              ${usedBy.length ? `<span class="swatch-app-tag">${usedBy.join("/")}</span>` : ""}
+            </div>
+            <div class="swatch-hex">${s.lightBg} → ${s.darkBg}</div>
+          </div>`;
+
+        chip.addEventListener("click", () => {
+          if (selectedAppIdx !== null) {
+            APPS[selectedAppIdx].swatchId = s.id;
+            document.querySelectorAll("[data-preset]").forEach((b) => b.classList.remove("active"));
+            updateHint();
+            renderAll();
+          } else {
+            document.getElementById("interactive-hint").textContent =
+              `提示：请先在下方左/右表盘点击要换色的 App 图标，再点击「${s.name}」色卡即可替换。`;
+          }
+        });
+
+        (s.group === "warm" ? warmWrap : coolWrap).appendChild(chip);
+      });
+    }
+
+    function updateHint() {
+      const el = document.getElementById("interactive-hint");
+      if (selectedAppIdx === null) {
+        el.textContent = "点击表盘上的任意 App 图标选中槽位，再点下方色卡即可实时试色（按住图标可预览按下态颜色）。";
+      } else {
+        const app = APPS[selectedAppIdx];
+        const sw = SWATCH_BY_ID[app.swatchId];
+        el.textContent = `已选中「${app.short}」（当前：${sw.name} ${sw.lightBg} / ${sw.darkBg}）— 点击任意马卡龙色卡即可替换，再次点击图标取消选中。`;
+      }
+    }
+
+    function renderAll() {
+      renderSwatches();
+      document.querySelectorAll(".screen").forEach((screen) => {
+        const layout = screen.dataset.layout;
+        if (layout === "orbit") buildOrbit(screen);
+        else if (layout === "orbit9") buildOrbit9(screen);
+        else if (layout === "icons") buildIcons(screen);
+      });
+    }
+
+    document.querySelectorAll("[data-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const ids = PRESETS[btn.dataset.preset];
+        if (!ids) return;
+        ids.forEach((id, idx) => { APPS[idx].swatchId = id; });
+        document.querySelectorAll("[data-preset]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        renderAll();
+      });
     });
+
+    document.getElementById("toggle-paper-btn").addEventListener("click", (e) => {
+      useIvoryPaper = !useIvoryPaper;
+      e.currentTarget.textContent = useIvoryPaper ? "浅色底：米白对比 #F5F0E8" : "浅色底：固件暖纸 #F7E9B8";
+      e.currentTarget.classList.toggle("active", useIvoryPaper);
+      renderAll();
+    });
+
+    document.getElementById("toggle-all9-mode").addEventListener("click", () => {
+      const scr = document.getElementById("screen-all9");
+      scr.dataset.mode = scr.dataset.mode === "dark" ? "light" : "dark";
+      buildOrbit9(scr);
+    });
+
+    document.getElementById("toggle-icons-mode").addEventListener("click", () => {
+      const scr = document.getElementById("screen-icons");
+      scr.dataset.mode = scr.dataset.mode === "dark" ? "light" : "dark";
+      buildIcons(scr);
+    });
+
+    renderAll();
 
     setInterval(() => {
       const t = nowHHMM();

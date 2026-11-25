@@ -99,11 +99,11 @@ void Cst820::sleep()
 
 bool Cst820::read_register(uint8_t reg, uint8_t* data, size_t len)
 {
-    return i2c_master_transmit_receive(_i2c_dev, &reg, 1, data, len, -1) == ESP_OK;
+    return i2c_master_transmit_receive(_i2c_dev, &reg, 1, data, len, 20) == ESP_OK;
 }
 
 bool Cst820::write_register(uint8_t reg, uint8_t data)
 {
     uint8_t write_buf[2] = {reg, data};
-    return i2c_master_transmit(_i2c_dev, write_buf, sizeof(write_buf), -1) == ESP_OK;
+    return i2c_master_transmit(_i2c_dev, write_buf, sizeof(write_buf), 20) == ESP_OK;
 }

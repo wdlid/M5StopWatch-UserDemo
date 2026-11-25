@@ -5,11 +5,10 @@
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
+#include <apps/common/audio/audio.h>
 #include <mooncake_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <cmath>
-#include <vector>
 
 static const std::string_view _tag = "HAL-EyeCare";
 
@@ -113,10 +112,10 @@ void Hal::eye_care_tick()
 
 void Hal::playEyeCareDing()
 {
-    mclog::tagInfo(_tag, "playing eye care reminder ding (boot sfx)");
+    mclog::tagInfo(_tag, "playing eye care reminder chime (ios bedtime style)");
     setSpeakerEnable(true);
     if (getSpeakerVolume() <= 0) {
         setSpeakerVolume(80, false);
     }
-    playBootSfx();
+    audio::play_eye_care_chime();
 }
