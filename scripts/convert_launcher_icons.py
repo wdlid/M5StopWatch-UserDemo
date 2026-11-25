@@ -2,7 +2,7 @@
 """Rasterize launcher SVGs in main/assets/images/src/ into LVGL RGB565A8 .c assets.
 
 Requires: rsvg-convert (librsvg2-bin), Pillow.
-Default output size: 200x200 (120 KB flash each), matching the launcher icon panel 1:1.
+Default output size: 72x72 RGB565A8 (~15 KB flash each), matching orbital launcher badges 1:1.
 """
 from __future__ import annotations
 
@@ -22,12 +22,9 @@ ICONS = [
     "icon_clock",
     "icon_setup",
     "icon_imu",
-    "icon_fft",
     "icon_gemini",
     "icon_stopwatch",
     "icon_badge",
-    "icon_lucky_wheel",
-    "icon_watch_face",
 ]
 
 
@@ -105,10 +102,10 @@ def write_c(name: str, w: int, h: int, rgba: bytes, out_dir: Path) -> int:
 
 
 def render_svg(svg_path: Path, size: int, pad_ratio: float) -> Image.Image:
-    """3x supersample then LANCZOS downscale for sharp edges at 1:1 display size."""
+    """4x supersample then LANCZOS downscale for sharp edges at 1:1 display size."""
     text = svg_path.read_text(encoding="utf-8")
     box = max(1, int(size * (1.0 - 2 * pad_ratio)))
-    render_px = box * 3
+    render_px = box * 4
     with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w", encoding="utf-8") as tf:
         tf.write(text)
         tmp_svg = Path(tf.name)
@@ -140,8 +137,8 @@ def render_svg(svg_path: Path, size: int, pad_ratio: float) -> Image.Image:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--size", type=int, default=200)
-    parser.add_argument("--pad", type=float, default=0.04)
+    parser.add_argument("--size", type=int, default=72)
+    parser.add_argument("--pad", type=float, default=0.03)
     args = parser.parse_args()
 
     total = 0

@@ -164,6 +164,8 @@ public:
     void requestPowerOff();
     bool isPowerOffRequested() const;
     void powerOff();
+    // True when this boot was resumed from standby deep sleep (button / alarm timer).
+    bool wokeFromDeepSleepStandby() const;
 
     /* --------------------------------- Display -------------------------------- */
     enum class ColorTemp : uint8_t {
@@ -193,6 +195,8 @@ public:
     void setThemeMode(ThemeMode mode, bool saveToSettings = true);
     ThemeMode getThemeMode(bool loadFromSettings = false);
     const GlobalTheme& getTheme() const;
+    void setClockFaceIndex(int index, bool saveToSettings = true);
+    int getClockFaceIndex(bool loadFromSettings = false);
 
     void setColorTemperature(ColorTemp temp, bool saveToSettings = false);
     ColorTemp getColorTemperature(bool loadFromSettings = false);
@@ -238,6 +242,8 @@ public:
 
     // Streaming audio API for Gemini Live full-duplex / PTT voice interaction
     void setSpeakerEnable(bool enable);
+    void audio_enter_standby();
+    void audio_exit_standby();
     bool audioRecordStream16k(std::vector<int16_t>& out16k, uint16_t durationMs = 60, float gain = 32.0f);
     void audioPushStreamPcm(const int16_t* samples, std::size_t count, int srcSampleRate = 24000);
     void audioClearStream();
@@ -400,6 +406,7 @@ private:
     void ioe_init();
     void ioe_tp_reset();
     void ioe_speaker_enable(bool enable);
+    void ioe_audio_rail_enable(bool enable);
     void ioe_power_off();
     void display_init();
     void touchpad_init();
@@ -411,6 +418,16 @@ private:
     void fs_init();
     void wifi_init();
     void wifi_tick();
+    void wifi_stop_for_deep_sleep();
+    void enterDeepSleepStandby();
+    uint32_t secondsUntilNextAlarmWakeup();
+    uint32_t secondsUntilNextEyeCareWakeup();
+    void allowNextEyeCareReminder();
+    void logDeepSleepWakeDiagnostics();
+    bool trySilentEyeCareWake() const;
+    void runSilentEyeCareWake();
+
+    bool _woke_from_deep_sleep_standby = false;
 };
 
 Hal& GetHAL();

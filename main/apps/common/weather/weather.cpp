@@ -14,6 +14,8 @@
 #include <mooncake_log.h>
 
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -121,21 +123,70 @@ AqiLevel level_from_pm25(int pm25)
     return AqiLevel::Hazardous;
 }
 
-std::string extract_temp(const char* wendu)
+std::string map_wind_dir(const char* fx)
 {
-    std::string temp;
-    if (wendu == nullptr) {
-        return temp;
+    if (fx == nullptr || fx[0] == '\0') {
+        return {};
     }
-    for (const char* p = wendu; *p; ++p) {
-        if ((*p >= '0' && *p <= '9') || (*p == '-' && temp.empty())) {
-            temp.push_back(*p);
+    if (std::strstr(fx, "东北") != nullptr) {
+        return "NE";
+    }
+    if (std::strstr(fx, "东南") != nullptr) {
+        return "SE";
+    }
+    if (std::strstr(fx, "西北") != nullptr) {
+        return "NW";
+    }
+    if (std::strstr(fx, "西南") != nullptr) {
+        return "SW";
+    }
+    if (std::strstr(fx, "东") != nullptr) {
+        return "E";
+    }
+    if (std::strstr(fx, "南") != nullptr) {
+        return "S";
+    }
+    if (std::strstr(fx, "西") != nullptr) {
+        return "W";
+    }
+    if (std::strstr(fx, "北") != nullptr) {
+        return "N";
+    }
+    if (std::strstr(fx, "无") != nullptr || std::strstr(fx, "微") != nullptr) {
+        return "Calm";
+    }
+    return {};
+}
+
+std::string extract_wind_level(const char* fl)
+{
+    if (fl == nullptr || fl[0] == '\0') {
+        return {};
+    }
+    std::string digits;
+    for (const char* p = fl; *p; ++p) {
+        if ((*p >= '0' && *p <= '9') || (*p == '-' && !digits.empty())) {
+            digits.push_back(*p);
         }
     }
-    if (!temp.empty()) {
-        temp += "C";
+    if (digits.empty()) {
+        return {};
     }
-    return temp;
+    return "Lv." + digits;
+}
+
+bool parse_temp_celsius(const char* wendu, int& out_c)
+{
+    if (wendu == nullptr || wendu[0] == '\0') {
+        return false;
+    }
+    char* endptr = nullptr;
+    float val    = std::strtof(wendu, &endptr);
+    if (endptr == wendu || !std::isfinite(val)) {
+        return false;
+    }
+    out_c = static_cast<int>(std::lround(val));
+    return true;
 }
 
 esp_err_t http_event_cb(esp_http_client_event_t* evt)
@@ -204,32 +255,59 @@ bool fetch_once()
 
     const char* wendu   = doc["data"]["wendu"] | "";
     const char* quality = doc["data"]["quality"] | "";
+    const char* shidu   = doc["data"]["shidu"] | "";
     int pm25            = doc["data"]["pm25"] | -1;
 
     const char* type_cn = "";
+    const char* fx_cn   = "";
+    const char* fl_cn   = "";
+    int forecast_aqi    = -1;
     if (doc["data"]["forecast"].is<JsonArray>() && doc["data"]["forecast"].size() > 0) {
-        type_cn = doc["data"]["forecast"][0]["type"] | "";
+        JsonVariantConst today = doc["data"]["forecast"][0];
+        type_cn                = today["type"] | "";
+        fx_cn                  = today["fx"] | "";
+        fl_cn                  = today["fl"] | "";
+        forecast_aqi           = today["aqi"] | -1;
     }
 
     Snapshot snap;
-    snap.temperature = extract_temp(wendu);
-    snap.condition   = map_weather_type(type_cn);
-    snap.aqiValue    = pm25;
-    snap.aqiLevel    = level_from_quality(quality);
-    if (snap.aqiLevel == AqiLevel::Unknown) {
-        snap.aqiLevel = level_from_pm25(pm25);
+    if (parse_temp_celsius(wendu, snap.tempC)) {
+        snap.hasTemp     = true;
+        snap.temperature = std::to_string(snap.tempC) + "C";
+        snap.tempDisplay = std::to_string(snap.tempC) + "\xC2\xB0" "C";
     }
-    if (pm25 >= 0) {
-        snap.aqiText = "AQ" + std::to_string(pm25);
+    snap.condition = map_weather_type(type_cn);
+    snap.windDir   = map_wind_dir(fx_cn);
+    snap.windLevel = extract_wind_level(fl_cn);
+    if (!snap.windDir.empty() && !snap.windLevel.empty()) {
+        snap.windText = (snap.windDir == "Calm") ? snap.windDir : (snap.windDir + " " + snap.windLevel);
+    } else if (!snap.windDir.empty()) {
+        snap.windText = snap.windDir;
+    } else if (!snap.windLevel.empty()) {
+        snap.windText = snap.windLevel;
+    }
+    if (shidu != nullptr && shidu[0] != '\0') {
+        snap.humidity = shidu;
     }
 
-    if (snap.temperature.empty() && snap.condition.empty() && snap.aqiText.empty()) {
+    const int aqi = (forecast_aqi >= 0) ? forecast_aqi : pm25;
+    snap.aqiValue = aqi;
+    snap.aqiLevel = level_from_quality(quality);
+    if (snap.aqiLevel == AqiLevel::Unknown) {
+        snap.aqiLevel = level_from_pm25(aqi);
+    }
+    if (aqi >= 0) {
+        snap.aqiText = "AQ" + std::to_string(aqi);
+    }
+
+    if (snap.temperature.empty() && snap.condition.empty() && snap.aqiText.empty() && snap.windText.empty()) {
         mclog::tagWarn(_tag, "empty weather snapshot");
         return false;
     }
 
     snap.valid = true;
-    mclog::tagInfo(_tag, "updated: {} {} {} (city {})", snap.temperature, snap.condition, snap.aqiText, kCityCode);
+    mclog::tagInfo(_tag, "updated: {} {} wind='{}' {} (city {})", snap.temperature, snap.condition, snap.windText,
+                   snap.aqiText, kCityCode);
     set_snapshot(std::move(snap));
     return true;
 }

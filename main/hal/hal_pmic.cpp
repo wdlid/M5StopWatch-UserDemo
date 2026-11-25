@@ -10,9 +10,12 @@
 #include <memory>
 #include <mutex>
 #include <cmath>
+#include <ctime>
+#include <esp_attr.h>
 #include <esp_sleep.h>
 #include <atomic>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -47,6 +50,49 @@ constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter
 uint8_t _bat_level        = 0;
 uint16_t _bat_filtered_mv = 0;
 std::mutex _bat_level_mutex;
+
+constexpr uint32_t _deep_sleep_diag_magic = 0xD5A1BEEFu;
+constexpr uint32_t _min_deep_sleep_sec    = 15;
+constexpr uint8_t _wake_reason_alarm      = 1u << 0;
+constexpr uint8_t _wake_reason_eyecare    = 1u << 1;
+
+struct DeepSleepDiag {
+    uint32_t magic       = 0;
+    uint16_t bat_mv      = 0;
+    uint8_t bat_pct      = 0;
+    uint8_t wake_reason  = 0;
+    int64_t unix_enter   = 0;
+};
+
+RTC_DATA_ATTR static DeepSleepDiag _deep_sleep_diag = {};
+
+uint16_t read_battery_mv()
+{
+    if (!_pm1) {
+        return 0;
+    }
+    uint16_t battery_mv = 0;
+    if (_pm1->readVbat(&battery_mv) != M5PM1_OK) {
+        return 0;
+    }
+    return battery_mv;
+}
+
+const char* wakeup_cause_name(esp_sleep_wakeup_cause_t cause)
+{
+    switch (cause) {
+        case ESP_SLEEP_WAKEUP_EXT0:
+            return "ext0";
+        case ESP_SLEEP_WAKEUP_EXT1:
+            return "ext1-button";
+        case ESP_SLEEP_WAKEUP_TIMER:
+            return "timer";
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            return "undefined";
+        default:
+            return "other";
+    }
+}
 
 void update_bat_level(uint8_t level)
 {
@@ -219,6 +265,209 @@ void Hal::setPowerLed(bool enabled)
     if (_pm1) {
         _pm1->setLedEnLevel(enabled);
     }
+}
+
+bool Hal::wokeFromDeepSleepStandby() const
+{
+    return _woke_from_deep_sleep_standby;
+}
+
+void Hal::logDeepSleepWakeDiagnostics()
+{
+    const auto cause = esp_sleep_get_wakeup_cause();
+    const uint8_t wake_reason =
+        (_deep_sleep_diag.magic == _deep_sleep_diag_magic) ? _deep_sleep_diag.wake_reason : 0;
+    const bool from_standby =
+        (_deep_sleep_diag.magic == _deep_sleep_diag_magic) &&
+        (cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_TIMER);
+
+    _woke_from_deep_sleep_standby = from_standby;
+
+    if (_deep_sleep_diag.magic != _deep_sleep_diag_magic) {
+        mclog::tagInfo(_tag, "boot wakeup cause: {}", wakeup_cause_name(cause));
+        return;
+    }
+
+    const uint16_t bat_mv_now = _bat_filtered_mv != 0 ? _bat_filtered_mv : read_battery_mv();
+    const uint8_t bat_pct_now = getBatteryLevel();
+    const int64_t now_unix    = static_cast<int64_t>(std::time(nullptr));
+    int64_t slept_sec         = 0;
+    if (_deep_sleep_diag.unix_enter > 0 && now_unix > _deep_sleep_diag.unix_enter) {
+        slept_sec = now_unix - _deep_sleep_diag.unix_enter;
+    }
+
+    int mv_delta  = static_cast<int>(bat_mv_now) - static_cast<int>(_deep_sleep_diag.bat_mv);
+    int pct_delta = static_cast<int>(bat_pct_now) - static_cast<int>(_deep_sleep_diag.bat_pct);
+
+    mclog::tagInfo(_tag,
+                   "deep-sleep wake cause={} reason=0x{:02X} slept≈{}s enter={}%/{}mV now={}%/{}mV Δ={}%/{}mV",
+                   wakeup_cause_name(cause), wake_reason, slept_sec, _deep_sleep_diag.bat_pct,
+                   _deep_sleep_diag.bat_mv, bat_pct_now, bat_mv_now, pct_delta, mv_delta);
+
+    if (slept_sec >= 600 && _deep_sleep_diag.bat_mv > 0 && bat_mv_now > 0 && mv_delta < 0) {
+        // Rough average current estimate assuming ~3.7V and ~1mV ~= capacity-dependent;
+        // report mV/hour as a relative metric (lower is better).
+        const double mv_per_hour = (-mv_delta) * 3600.0 / static_cast<double>(slept_sec);
+        mclog::tagInfo(_tag, "deep-sleep drain metric: {:.1f} mV/h (compare before/after firmware)", mv_per_hour);
+    }
+
+    _deep_sleep_diag.magic = 0;
+
+    // Button / normal UI wake must not force an eye-care ding.
+    // Only when a timer wake also targeted eye-care (e.g. same minute as alarm) unlock ding.
+    if (from_standby && cause == ESP_SLEEP_WAKEUP_TIMER && (wake_reason & _wake_reason_eyecare) &&
+        getEyeCareReminder()) {
+        allowNextEyeCareReminder();
+    }
+}
+
+bool Hal::trySilentEyeCareWake() const
+{
+    if (_deep_sleep_diag.magic != _deep_sleep_diag_magic) {
+        return false;
+    }
+    // Never steal button / ext0 / undefined wakes — those always take the normal UI path.
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
+        return false;
+    }
+    const uint8_t reason = _deep_sleep_diag.wake_reason;
+    // Eye-care alone → silent. Any alarm bit → full boot so alarm UI is unaffected.
+    return (reason & _wake_reason_eyecare) != 0 && (reason & _wake_reason_alarm) == 0;
+}
+
+void Hal::runSilentEyeCareWake()
+{
+    _woke_from_deep_sleep_standby = true;
+
+    const uint16_t bat_mv_now = _bat_filtered_mv != 0 ? _bat_filtered_mv : read_battery_mv();
+    const uint8_t bat_pct_now = getBatteryLevel();
+    const int64_t now_unix    = static_cast<int64_t>(std::time(nullptr));
+    int64_t slept_sec         = 0;
+    if (_deep_sleep_diag.unix_enter > 0 && now_unix > _deep_sleep_diag.unix_enter) {
+        slept_sec = now_unix - _deep_sleep_diag.unix_enter;
+    }
+    mclog::tagInfo(_tag,
+                   "silent eye-care wake (no display), slept≈{}s enter={}%/{}mV now={}%/{}mV", slept_sec,
+                   _deep_sleep_diag.bat_pct, _deep_sleep_diag.bat_mv, bat_pct_now, bat_mv_now);
+
+    _deep_sleep_diag.magic = 0;
+
+    auto reenter_deep_sleep_forever = [this]() {
+        // Must not fall through into display/UI init — that would look like a normal wake.
+        for (;;) {
+            enterDeepSleepStandby();
+            mclog::tagWarn(_tag, "deep sleep deferred after silent eye-care, retry");
+            delay(2000);
+        }
+    };
+
+    if (!getEyeCareReminder(true)) {
+        mclog::tagInfo(_tag, "eye care off — skip ding, return to deep sleep");
+        reenter_deep_sleep_forever();
+        return;
+    }
+
+    allowNextEyeCareReminder();
+
+    // We schedule a few seconds early; wait for the :X0 minute without lighting the panel.
+    const uint32_t wait_start = millis();
+    while (getTimeHms().minute % 10 != 0) {
+        if (millis() - wait_start > 20000) {
+            break;
+        }
+        delay(100);
+    }
+
+    const auto time = getTimeHms();
+    mclog::tagInfo(_tag, "eye care ding at {:02d}:{:02d} (screen off)", time.hour, time.minute);
+    playEyeCareDing();
+
+    const uint32_t audio_start = millis();
+    while (isAudioPlaying()) {
+        if (millis() - audio_start > 10000) {
+            break;
+        }
+        delay(50);
+    }
+    delay(500);
+
+    reenter_deep_sleep_forever();
+}
+
+void Hal::enterDeepSleepStandby()
+{
+    if (_shutting_down.exchange(true)) {
+        return;
+    }
+
+    const uint32_t alarm_wake_sec = secondsUntilNextAlarmWakeup();
+    // Returns 0 when eye care is disabled — no timer wake scheduled for it.
+    const uint32_t eye_wake_sec = secondsUntilNextEyeCareWakeup();
+
+    uint32_t timer_wake_sec = 0;
+    if (alarm_wake_sec != 0 && eye_wake_sec != 0) {
+        timer_wake_sec = std::min(alarm_wake_sec, eye_wake_sec);
+    } else {
+        timer_wake_sec = alarm_wake_sec != 0 ? alarm_wake_sec : eye_wake_sec;
+    }
+
+    uint8_t wake_reason = 0;
+    if (timer_wake_sec != 0) {
+        if (alarm_wake_sec == timer_wake_sec) {
+            wake_reason |= _wake_reason_alarm;
+        }
+        if (eye_wake_sec == timer_wake_sec) {
+            wake_reason |= _wake_reason_eyecare;
+        }
+    }
+
+    if (timer_wake_sec != 0 && timer_wake_sec < _min_deep_sleep_sec) {
+        mclog::tagInfo(_tag, "skip deep sleep, next timer wake in {}s (alarm={}s eye={}s)", timer_wake_sec,
+                       alarm_wake_sec, eye_wake_sec);
+        _shutting_down.store(false);
+        return;
+    }
+
+    const uint16_t bat_mv = _bat_filtered_mv != 0 ? _bat_filtered_mv : read_battery_mv();
+    const uint8_t bat_pct = getBatteryLevel();
+    mclog::tagInfo(_tag,
+                   "entering deep sleep standby, bat={}%/{}mV, timer_wake={}s (alarm={}s eye={}s reason=0x{:02X})",
+                   bat_pct, bat_mv, timer_wake_sec, alarm_wake_sec, eye_wake_sec, wake_reason);
+
+    _deep_sleep_diag.magic       = _deep_sleep_diag_magic;
+    _deep_sleep_diag.bat_mv      = bat_mv;
+    _deep_sleep_diag.bat_pct     = bat_pct;
+    _deep_sleep_diag.wake_reason = wake_reason;
+    _deep_sleep_diag.unix_enter  = static_cast<int64_t>(std::time(nullptr));
+
+    setPowerLed(false);
+    wifi_stop_for_deep_sleep();
+    audio_enter_standby();
+    ioe_power_off();
+
+    // Wait for buttons released so ext1 does not bounce awake immediately.
+    while (!gpio_get_level(GPIO_NUM_0) || !gpio_get_level(GPIO_NUM_1) || !gpio_get_level(GPIO_NUM_2) ||
+           pmic_get_pwr_btn_state()) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    const gpio_num_t wake_pins[] = {GPIO_NUM_0, GPIO_NUM_1, GPIO_NUM_2};
+    uint64_t ext1_mask           = 0;
+    for (gpio_num_t pin : wake_pins) {
+        rtc_gpio_init(pin);
+        rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+        rtc_gpio_pullup_en(pin);
+        rtc_gpio_pulldown_dis(pin);
+        ext1_mask |= 1ULL << pin;
+    }
+    esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+
+    if (timer_wake_sec >= _min_deep_sleep_sec) {
+        esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(timer_wake_sec) * 1000000ULL);
+    }
+
+    esp_deep_sleep_start();
 }
 
 uint8_t Hal::getBatteryLevel()

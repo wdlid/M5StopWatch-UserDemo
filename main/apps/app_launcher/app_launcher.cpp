@@ -23,6 +23,10 @@ void AppLauncher::onLauncherOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
+    if (GetHAL().wokeFromDeepSleepStandby()) {
+        _should_play_boot_sfx = false;
+    }
+
     show_guide_page();
 
     {
@@ -90,6 +94,10 @@ void AppLauncher::create_launcher_view()
 void AppLauncher::show_guide_page()
 {
     if (!_is_first_open) {
+        return;
+    }
+
+    if (GetHAL().wokeFromDeepSleepStandby()) {
         return;
     }
 

@@ -7,6 +7,7 @@
 #include "utils/settings/settings.h"
 #include <apps/common/audio/audio.h>
 #include <algorithm>
+#include <ctime>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -181,6 +182,45 @@ AlarmController& get_alarm_controller()
 }
 
 }  // namespace
+
+uint32_t Hal::secondsUntilNextAlarmWakeup()
+{
+    AlarmStorageSnapshot snapshot;
+    if (!loadAlarmStorage(snapshot) || snapshot.count == 0) {
+        return 0;
+    }
+
+    const std::time_t now_sec = std::time(nullptr);
+    std::tm local_tm          = {};
+    if (localtime_r(&now_sec, &local_tm) == nullptr) {
+        return 0;
+    }
+
+    const int now_tod = local_tm.tm_hour * 3600 + local_tm.tm_min * 60 + local_tm.tm_sec;
+    uint32_t best_sec = 0;
+
+    const std::size_t count = std::min<std::size_t>(snapshot.count, AlarmStorageSnapshot::maxAlarmCount);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& entry = snapshot.alarms[i];
+        if (!entry.isValid() || entry.enabled == 0) {
+            continue;
+        }
+
+        const int alarm_tod = static_cast<int>(entry.hour) * 3600 + static_cast<int>(entry.minute) * 60;
+        int delta           = alarm_tod - now_tod;
+        if (delta <= 0) {
+            delta += 24 * 3600;
+        }
+
+        // Wake early so full reboot + HAL init can finish before the alarm minute.
+        const uint32_t wake_sec = static_cast<uint32_t>(std::max(delta - 20, 1));
+        if (best_sec == 0 || wake_sec < best_sec) {
+            best_sec = wake_sec;
+        }
+    }
+
+    return best_sec;
+}
 
 bool Hal::loadAlarmStorage(AlarmStorageSnapshot& snapshot)
 {

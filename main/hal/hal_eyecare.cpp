@@ -50,6 +50,43 @@ bool Hal::getEyeCareReminder(bool loadFromSettings)
     return _eye_care_enabled;
 }
 
+void Hal::allowNextEyeCareReminder()
+{
+    _last_eye_reminder_minute = -1;
+}
+
+uint32_t Hal::secondsUntilNextEyeCareWakeup()
+{
+    if (!_eye_care_enabled) {
+        return 0;
+    }
+
+    const auto time = getTimeHms();
+    if (!time.isValid()) {
+        return 0;
+    }
+
+    // Reminders fire at minute 0/10/20/30/40/50.
+    int minutes_until = 10 - static_cast<int>(time.minute % 10);
+    if (minutes_until == 10) {
+        // Already on a boundary minute: :00 is "due now"; otherwise next decade.
+        minutes_until = (time.second == 0) ? 0 : 10;
+    }
+
+    if (minutes_until == 0) {
+        // Due right now — return a short deadline so deep sleep is deferred to soft-standby.
+        return 1;
+    }
+
+    int wake_sec = minutes_until * 60 - static_cast<int>(time.second);
+    // Wake a few seconds early so boot finishes before the ding minute.
+    wake_sec -= 5;
+    if (wake_sec < 1) {
+        return 1;
+    }
+    return static_cast<uint32_t>(wake_sec);
+}
+
 void Hal::eye_care_tick()
 {
     if (!_eye_care_enabled) {
@@ -77,7 +114,7 @@ void Hal::eye_care_tick()
 void Hal::playEyeCareDing()
 {
     mclog::tagInfo(_tag, "playing eye care reminder ding (boot sfx)");
-    ioe_speaker_enable(true);
+    setSpeakerEnable(true);
     if (getSpeakerVolume() <= 0) {
         setSpeakerVolume(80, false);
     }

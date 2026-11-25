@@ -36,16 +36,25 @@ void Hal::init()
     pmic_init();
     ioe_init();
     delay(50);
+    rtc_init();
+
+    // Only the eye-care-only timer takes the silent path. Button / alarm / power
+    // wakes never match trySilentEyeCareWake() and boot the normal UI below.
+    if (trySilentEyeCareWake()) {
+        audio_init();
+        runSilentEyeCareWake();  // never returns
+    }
+
     display_init();
     touchpad_init();
     lvgl_init();
     audio_init();
     imu_init();
-    rtc_init();
     button_init();
     fs_init();
     wifi_init();
     getEyeCareReminder(true);
+    logDeepSleepWakeDiagnostics();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -86,7 +95,8 @@ void Hal::feedTheDog()
     wifi_tick();
     display_tick();
     eye_care_tick();
-    vTaskDelay(pdMS_TO_TICKS(isScreenSleeping() ? 20 : 5));
+    // Soft-standby: poll less often to cut CPU wakeups before deep sleep.
+    vTaskDelay(pdMS_TO_TICKS(isScreenSleeping() ? 100 : 5));
 }
 
 std::array<uint8_t, 6> Hal::getFactoryMac()

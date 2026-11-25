@@ -78,24 +78,6 @@ private:
  * @brief
  *
  */
-class ThemeWorker : public WorkerBase {
-public:
-    ThemeWorker();
-    ~ThemeWorker();
-    void update() override;
-
-private:
-    class ThemeView;
-    std::unique_ptr<ThemeView> _view;
-    Hal::ThemeMode _applied_theme = Hal::ThemeMode::Dark;
-    Hal::ThemeMode _initial_theme = Hal::ThemeMode::Dark;
-    bool _saved                   = false;
-};
-
-/**
- * @brief
- *
- */
 class ColorTempWorker : public WorkerBase {
 public:
     ColorTempWorker();

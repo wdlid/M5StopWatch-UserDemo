@@ -334,9 +334,6 @@ std::string GeminiLiveClient::buildSetupJson() const
         f["parameters"]["properties"].to<JsonObject>();
     }
 
-    // Enable Gemini built-in Google Search grounding (handles web search & weather server-side)
-    setup["tools"][1]["googleSearch"].to<JsonObject>();
-
     std::string out;
     serializeJson(doc, out);
     return out;
@@ -498,7 +495,7 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
             _server_turn_finished      = true;
             _ignore_current_turn_audio = false;
             _state                     = SessionState::Ready;
-            setStatusText("Ready - Hold/Tap to Talk");
+            setStatusText("");
             audio::play_tone_from_midi(72, 0.04f, 0.4f);
         }
     }
@@ -509,6 +506,17 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
             _in_progress_continuation_count = 0;
             _ws.sendText(tool_resp);
         }
+    }
+
+    if (jsonText.find("\"error\"") != std::string::npos) {
+        mclog::tagWarn(_tag, "Server error JSON: {}", jsonText.substr(0, 256));
+        if (_state.load() == SessionState::Thinking && !_ptt_active.load()) {
+            _state = SessionState::Ready;
+            setStatusText("");
+        }
+    } else if (jsonText.find("\"setupComplete\"") == std::string::npos &&
+               jsonText.find("\"inlineData\"") == std::string::npos) {
+        mclog::tagInfo(_tag, "Server JSON: {}", jsonText.substr(0, 200));
     }
 
     // Parse transcripts and turn flags only if relevant keys exist to save CPU & avoid PSRAM churn
@@ -533,7 +541,7 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
                     GetHAL().audioClearStream();
                     if (!_ptt_active.load()) {
                         _state = SessionState::Ready;
-                        setStatusText("Ready");
+                        setStatusText("");
                     }
                 }
 
@@ -573,6 +581,10 @@ void GeminiLiveClient::handleServerJson(const std::string& jsonText)
                         _ws.sendText(R"({"clientContent":{"turnComplete":true}})");
                     } else {
                         _ignore_current_turn_audio = false;
+                        if (_state.load() == SessionState::Thinking && !_ptt_active.load()) {
+                            _state = SessionState::Ready;
+                            setStatusText("");
+                        }
                     }
                 }
             }
@@ -642,7 +654,9 @@ void GeminiLiveClient::taskLoop()
         }
 
         // Handle PTT state transitions
+        static uint32_t ptt_frames_sent = 0;
         if (_ptt_just_started.exchange(false)) {
+            ptt_frames_sent                 = 0;
             _in_progress_continuation_count = 0;
             appendUserTranscript("", true);
             appendModelTranscript("", true);
@@ -656,19 +670,24 @@ void GeminiLiveClient::taskLoop()
                 const bool is_google =
                     _config.wsUrl.find("generativelanguage.googleapis.com") != std::string::npos;
 
+                bool sent = false;
                 if (_config.binaryAudioMode && !is_google) {
-                    _ws.sendBinary(raw_bytes, nbyte);
+                    sent = _ws.sendBinary(raw_bytes, nbyte);
                 } else {
                     std::string b64 = encode_base64_str(raw_bytes, nbyte);
                     std::string msg =
                         R"({"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":")" + b64 + R"("}}})";
-                    _ws.sendText(msg);
+                    sent = _ws.sendText(msg);
+                }
+                if (sent) {
+                    ptt_frames_sent++;
                 }
             }
         }
 
         if (_ptt_just_ended.exchange(false) && _setup_complete.load()) {
-            _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
+            bool ok = _ws.sendText(R"({"realtimeInput":{"audioStreamEnd":true}})");
+            mclog::tagInfo(_tag, "PTT ended: sent {} audio frames, audioStreamEnd={}", ptt_frames_sent, ok);
         }
 
         // Fallback: reset ignore flag if 3s have elapsed since interruption without server turn completion
@@ -714,7 +733,7 @@ void GeminiLiveClient::taskLoop()
         if (_state.load() == SessionState::Speaking && !GetHAL().isAudioPlaying() &&
             GetHAL().audioGetStreamQueuedMs() == 0) {
             _state = SessionState::Ready;
-            setStatusText("Ready - Hold/Tap to Talk");
+            setStatusText("");
         }
     }
 

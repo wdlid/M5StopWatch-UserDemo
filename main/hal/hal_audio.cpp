@@ -570,7 +570,7 @@ private:
                     esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
                                         _silence_buffer.size() * sizeof(int16_t));
                     if (GetHAL().isScreenSleeping()) {
-                        GetHAL().setSpeakerEnable(false);
+                        GetHAL().audio_enter_standby();
                     }
                     continue;
                 }
@@ -639,7 +639,7 @@ private:
                     was_streaming   = false;
                     last_stream_val = 0;
                     if (GetHAL().isScreenSleeping()) {
-                        GetHAL().setSpeakerEnable(false);
+                        GetHAL().audio_enter_standby();
                     }
                 }
 
@@ -962,7 +962,29 @@ Hal::AudioSpectrumFrame Hal::getAudioSpectrum() const
 
 void Hal::setSpeakerEnable(bool enable)
 {
-    ioe_speaker_enable(enable);
+    if (enable) {
+        // Soft-standby cuts AU_EN; re-enable the rail before PA so tones can play.
+        ioe_audio_rail_enable(true);
+        ioe_speaker_enable(true);
+    } else {
+        ioe_speaker_enable(false);
+    }
+}
+
+void Hal::audio_enter_standby()
+{
+    mclog::tagInfo(_tag, "enter standby");
+    _audio_codec.setOutputMute(true);
+    ioe_speaker_enable(false);
+    ioe_audio_rail_enable(false);
+}
+
+void Hal::audio_exit_standby()
+{
+    mclog::tagInfo(_tag, "exit standby");
+    ioe_audio_rail_enable(true);
+    ioe_speaker_enable(true);
+    _audio_codec.setOutputMute(false);
 }
 
 bool Hal::audioRecordStream16k(std::vector<int16_t>& out16k, uint16_t durationMs, float gain)

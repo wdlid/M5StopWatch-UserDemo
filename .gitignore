@@ -66,3 +66,4 @@ sdkconfig.old
 m5stopwatch-factory-0x0.bin
 dist/
 dist-idf/
+.env

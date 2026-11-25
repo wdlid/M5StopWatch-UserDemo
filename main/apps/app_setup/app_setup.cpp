@@ -167,16 +167,16 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.onLeftAction       = [this]() { close(); };
 
         const uint32_t timeout    = GetHAL().getScreenTimeout();
+        const auto color_temp     = GetHAL().getColorTemperature();
         const auto btn_cfg        = GetHAL().getButtonConfig();
         const auto wifi_status    = GetHAL().getWifiStatus();
         const auto time_hms       = GetHAL().getTimeHms();
         const std::string tz      = GetHAL().getTimezone();
-        const auto theme_mode     = GetHAL().getThemeMode();
 
         cfg.items = {
             {
                 "Display",
-                fmt::format("{}  /  {}", theme_mode == Hal::ThemeMode::Dark ? "Dark" : "Light", format_timeout(timeout)),
+                fmt::format("{}  /  {}", format_timeout(timeout), format_color_temp(color_temp)),
                 LV_SYMBOL_IMAGE,
                 0xFFB74D,
                 true,
@@ -226,14 +226,6 @@ view::SelectMenuPage::Config AppSetup::build_menu_config(MenuPageId page)
         cfg.onLeftAction       = [goto_page]() { goto_page(MenuPageId::Root); };
 
         cfg.items = {
-            {
-                "Theme",
-                GetHAL().getThemeMode() == Hal::ThemeMode::Dark ? "Dark" : "Light (Warm)",
-                LV_SYMBOL_IMAGE,
-                0x4DD0E1,
-                true,
-                [launch_worker]() { launch_worker([]() { return std::make_unique<ThemeWorker>(); }); },
-            },
             {
                 "Screen Timeout",
                 format_timeout(GetHAL().getScreenTimeout()),

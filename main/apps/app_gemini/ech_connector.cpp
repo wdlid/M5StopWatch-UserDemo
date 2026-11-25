@@ -1124,9 +1124,16 @@ bool EchWebSocketClient::poll(int timeoutMs,
 
     // Handle control frames (Close = 0x08, Ping = 0x09, Pong = 0x0A)
     if (opcode == 0x08) {
+        std::string close_msg = "Server closed WebSocket";
+        if (payload.size() >= 2) {
+            uint16_t code = (static_cast<uint16_t>(payload[0]) << 8) | static_cast<uint16_t>(payload[1]);
+            std::string reason(reinterpret_cast<const char*>(payload.data() + 2), payload.size() - 2);
+            close_msg += " (" + std::to_string(code) + (reason.empty() ? "" : ": " + reason) + ")";
+        }
+        mclog::tagWarn(_tag, "{}", close_msg);
         sendWsFrame(0x08, nullptr, 0);
         _connected = false;
-        if (onError) onError("Server closed WebSocket");
+        if (onError) onError(close_msg);
         return false;
     } else if (opcode == 0x09) {
         sendWsFrame(0x0A, payload.data(), payload.size());

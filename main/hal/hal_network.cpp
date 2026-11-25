@@ -224,6 +224,18 @@ public:
         }
     }
 
+    void prepare_deep_sleep()
+    {
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _wifi_suspended        = true;
+            _screen_sleep_start_ms = 0;
+        }
+        mclog::tagInfo(_tag, "stopping Wi-Fi before deep sleep");
+        stop_wifi_owner();
+        set_off_status("Deep sleep");
+    }
+
 private:
     bool load_enabled_from_settings()
     {
@@ -501,4 +513,9 @@ void Hal::wifi_exit_badge_ap()
 void Hal::wifi_on_screen_wake()
 {
     get_network_controller().on_screen_wake();
+}
+
+void Hal::wifi_stop_for_deep_sleep()
+{
+    get_network_controller().prepare_deep_sleep();
 }

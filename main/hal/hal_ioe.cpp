@@ -124,6 +124,14 @@ void Hal::ioe_speaker_enable(bool enable)
     }
 }
 
+void Hal::ioe_audio_rail_enable(bool enable)
+{
+    mclog::tagInfo(_tag, "set audio rail {}", enable ? "enable" : "disable");
+    if (_ioe) {
+        _ioe->digitalWrite(PY32_AU_EN_PIN, enable ? 1 : 0);
+    }
+}
+
 void Hal::ioe_power_off()
 {
     mclog::tagInfo(_tag, "power off peripherals");

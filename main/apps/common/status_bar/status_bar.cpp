@@ -36,7 +36,7 @@ public:
         _is_tracking_down = false;
         _is_tracking_up   = false;
         _last_state       = LV_INDEV_STATE_REL;
-        _top_threshold    = 60;  // Trigger within top 60px (status bar area)
+        _top_threshold    = 46;  // Trigger within top 46px bezel zone
         _swipe_min_dist   = 45;
     }
 
@@ -97,17 +97,18 @@ namespace status_bar_view {
 
 constexpr uint32_t _brightness_accent = 0x9C661F;  // Warm amber/ochre
 constexpr uint32_t _volume_accent     = 0x1F6E58;  // Deep forest teal
+constexpr uint32_t _theme_accent      = 0x4A6FA5;  // Slate blue
 
 class QuickSettingRow {
 public:
     QuickSettingRow(lv_obj_t* parent, int y, const char* symbol, const char* title, int minVal, int maxVal,
                     uint32_t accentColor, std::function<void(int, bool)> onChanged)
-        : _on_changed(std::move(onChanged))
+        : _accent_color(accentColor), _on_changed(std::move(onChanged))
     {
         auto& theme = GetHAL().getTheme();
 
         _box = std::make_unique<Container>(parent);
-        _box->setSize(298, 80);
+        _box->setSize(298, 76);
         _box->align(LV_ALIGN_TOP_MID, 0, y);
         _box->setRadius(16);
         _box->setBgColor(lv_color_hex(theme.background));
@@ -119,25 +120,25 @@ public:
 
         _icon = std::make_unique<Label>(_box->get());
         _icon->setText(symbol);
-        _icon->setTextFont(&lv_font_montserrat_16);
+        _icon->setTextFont(&lv_font_montserrat_20);
         _icon->setTextColor(lv_color_hex(accentColor));
-        _icon->align(LV_ALIGN_TOP_LEFT, 14, 12);
+        _icon->align(LV_ALIGN_TOP_LEFT, 14, 10);
 
         _title = std::make_unique<Label>(_box->get());
         _title->setText(title);
-        _title->setTextFont(&lv_font_montserrat_16);
+        _title->setTextFont(&MontserratSemiBold18);
         _title->setTextColor(lv_color_hex(theme.textPrimary));
-        _title->align(LV_ALIGN_TOP_LEFT, 40, 12);
+        _title->align(LV_ALIGN_TOP_LEFT, 42, 10);
 
         _value_label = std::make_unique<Label>(_box->get());
         _value_label->setText("0%");
-        _value_label->setTextFont(&lv_font_montserrat_16);
+        _value_label->setTextFont(&MontserratSemiBold18);
         _value_label->setTextColor(lv_color_hex(accentColor));
-        _value_label->align(LV_ALIGN_TOP_RIGHT, -14, 12);
+        _value_label->align(LV_ALIGN_TOP_RIGHT, -14, 10);
 
         _slider = std::make_unique<Slider>(_box->get());
         _slider->setSize(266, 8);
-        _slider->align(LV_ALIGN_BOTTOM_MID, 0, -16);
+        _slider->align(LV_ALIGN_BOTTOM_MID, 0, -15);
         _slider->setRange(minVal, maxVal, false);
         _slider->setBgColor(lv_color_hex(theme.border), LV_PART_MAIN);
         _slider->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
@@ -155,6 +156,8 @@ public:
         lv_obj_set_style_border_color(_slider->get(), lv_color_hex(accentColor), LV_PART_KNOB);
         lv_obj_set_style_radius(_slider->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
         lv_obj_set_style_pad_all(_slider->get(), 5, LV_PART_KNOB);
+        // Expand touch hit area around the 8px slider track for reliable finger dragging
+        lv_obj_set_ext_click_area(_slider->get(), 18);
 
         _slider->onValueChanged().connect([this](int32_t val) {
             if (_syncing) {
@@ -186,6 +189,17 @@ public:
         updateLabel(val);
     }
 
+    void applyTheme()
+    {
+        auto& theme = GetHAL().getTheme();
+        _box->setBgColor(lv_color_hex(theme.background));
+        _box->setBorderColor(lv_color_hex(theme.border));
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _slider->setBgColor(lv_color_hex(theme.border), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_slider->get(), lv_color_hex(theme.cardBackground), LV_PART_KNOB);
+        lv_obj_set_style_border_color(_slider->get(), lv_color_hex(_accent_color), LV_PART_KNOB);
+    }
+
     bool isSliderPressed() const
     {
         return _slider && lv_obj_has_state(_slider->get(), LV_STATE_PRESSED);
@@ -197,6 +211,7 @@ private:
         _value_label->setText(fmt::format("{}%", val));
     }
 
+    uint32_t _accent_color = 0;
     std::unique_ptr<Container> _box;
     std::unique_ptr<Label> _icon;
     std::unique_ptr<Label> _title;
@@ -206,12 +221,115 @@ private:
     bool _syncing = false;
 };
 
+class QuickThemeRow {
+public:
+    QuickThemeRow(lv_obj_t* parent, int y, std::function<void(Hal::ThemeMode)> onChanged)
+        : _on_changed(std::move(onChanged))
+    {
+        auto& theme = GetHAL().getTheme();
+
+        _box = std::make_unique<Container>(parent);
+        _box->setSize(298, 54);
+        _box->align(LV_ALIGN_TOP_MID, 0, y);
+        _box->setRadius(16);
+        _box->setBgColor(lv_color_hex(theme.background));
+        _box->setBgOpa(LV_OPA_COVER);
+        _box->setBorderWidth(1);
+        _box->setBorderColor(lv_color_hex(theme.border));
+        _box->setPaddingAll(0);
+        _box->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        _icon = std::make_unique<Label>(_box->get());
+        _icon->setText(LV_SYMBOL_TINT);
+        _icon->setTextFont(&lv_font_montserrat_20);
+        _icon->setTextColor(lv_color_hex(_theme_accent));
+        _icon->align(LV_ALIGN_LEFT_MID, 14, 0);
+        _icon->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        _title = std::make_unique<Label>(_box->get());
+        _title->setText("Theme");
+        _title->setTextFont(&MontserratSemiBold18);
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _title->align(LV_ALIGN_LEFT_MID, 42, 0);
+        _title->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        _mode_label = std::make_unique<Label>(_box->get());
+        _mode_label->setText("Dark");
+        _mode_label->setTextFont(&MontserratSemiBold16);
+        _mode_label->setTextColor(lv_color_hex(theme.textSecondary));
+        _mode_label->align(LV_ALIGN_RIGHT_MID, -68, 0);
+        _mode_label->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+
+        _switch = std::make_unique<Switch>(_box->get());
+        _switch->setSize(46, 26);
+        _switch->align(LV_ALIGN_RIGHT_MID, -14, 0);
+        _switch->setBgColor(lv_color_hex(theme.border), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(_switch->get(), lv_color_hex(_theme_accent),
+                                  static_cast<lv_style_selector_t>(LV_PART_INDICATOR) | LV_STATE_CHECKED);
+        lv_obj_set_ext_click_area(_switch->get(), 14);
+
+        _switch->onValueChanged().connect([this](bool isLight) {
+            if (_syncing) {
+                return;
+            }
+            Hal::ThemeMode mode = isLight ? Hal::ThemeMode::Light : Hal::ThemeMode::Dark;
+            updateLabel(mode);
+            if (_on_changed) {
+                _on_changed(mode);
+            }
+        });
+
+        // Tapping anywhere on the row also toggles the theme
+        _box->onClick().connect([this]() {
+            bool next_light     = !_switch->getValue();
+            Hal::ThemeMode mode = next_light ? Hal::ThemeMode::Light : Hal::ThemeMode::Dark;
+            setTheme(mode);
+            if (_on_changed) {
+                _on_changed(mode);
+            }
+        });
+    }
+
+    void setTheme(Hal::ThemeMode mode)
+    {
+        _syncing = true;
+        _switch->setValue(mode == Hal::ThemeMode::Light);
+        _syncing = false;
+        updateLabel(mode);
+    }
+
+    void applyTheme()
+    {
+        auto& theme = GetHAL().getTheme();
+        _box->setBgColor(lv_color_hex(theme.background));
+        _box->setBorderColor(lv_color_hex(theme.border));
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _mode_label->setTextColor(lv_color_hex(theme.textSecondary));
+        _switch->setBgColor(lv_color_hex(theme.border), LV_PART_MAIN);
+    }
+
+private:
+    void updateLabel(Hal::ThemeMode mode)
+    {
+        _mode_label->setText(mode == Hal::ThemeMode::Light ? "Light" : "Dark");
+    }
+
+    std::unique_ptr<Container> _box;
+    std::unique_ptr<Label> _icon;
+    std::unique_ptr<Label> _title;
+    std::unique_ptr<Label> _mode_label;
+    std::unique_ptr<Switch> _switch;
+    std::function<void(Hal::ThemeMode)> _on_changed;
+    bool _syncing = false;
+};
+
 class StatusBarView {
 public:
     StatusBarView(lv_obj_t* parent, uint32_t /*colorSecondary*/, uint32_t /*colorPrimary*/)
     {
         auto& theme = GetHAL().getTheme();
         bool is_light = (GetHAL().getThemeMode() == Hal::ThemeMode::Light);
+        _last_theme   = GetHAL().getThemeMode();
 
         // Full-screen dimmed backdrop
         _backdrop = std::make_unique<Container>(parent);
@@ -227,8 +345,8 @@ public:
 
         // Quick Settings card
         _card = std::make_unique<Container>(_backdrop->get());
-        _card->setSize(336, 286);
-        _card->align(LV_ALIGN_CENTER, 0, 12);
+        _card->setSize(336, 322);
+        _card->align(LV_ALIGN_CENTER, 0, _pos_y_show);
         _card->setRadius(24);
         _card->setBgColor(lv_color_hex(theme.cardBackground));
         _card->setBgOpa(LV_OPA_COVER);
@@ -252,33 +370,40 @@ public:
         // Card title
         _title = std::make_unique<Label>(_card->get());
         _title->setText("Quick Settings");
-        _title->setTextFont(&lv_font_montserrat_20);
+        _title->setTextFont(&MontserratSemiBold22);
         _title->setTextColor(lv_color_hex(theme.textPrimary));
-        _title->align(LV_ALIGN_TOP_MID, 0, 26);
+        _title->align(LV_ALIGN_TOP_MID, 0, 22);
 
         // Brightness row (5% - 100%)
         _brightness_row = std::make_unique<QuickSettingRow>(
-            _card->get(), 64, LV_SYMBOL_EYE_OPEN, "Brightness", 5, 100, _brightness_accent,
+            _card->get(), 58, LV_SYMBOL_EYE_OPEN, "Brightness", 5, 100, _brightness_accent,
             [](int val, bool save) { GetHAL().setBackLightBrightness(val, save); });
 
         // Volume row (0% - 100%)
         _volume_row = std::make_unique<QuickSettingRow>(
-            _card->get(), 154, LV_SYMBOL_VOLUME_MAX, "Volume", 0, 100, _volume_accent,
+            _card->get(), 142, LV_SYMBOL_VOLUME_MAX, "Volume", 0, 100, _volume_accent,
             [](int val, bool save) { GetHAL().setSpeakerVolume(val, save); });
+
+        // Theme row (Dark / Light)
+        _theme_row = std::make_unique<QuickThemeRow>(_card->get(), 226, [this](Hal::ThemeMode mode) {
+            GetHAL().setThemeMode(mode, true);
+            applyTheme();
+        });
 
         // Bottom close hint button
         _close_hint = std::make_unique<Container>(_card->get());
-        _close_hint->setSize(220, 36);
+        _close_hint->setSize(220, 32);
         _close_hint->align(LV_ALIGN_BOTTOM_MID, 0, -6);
         _close_hint->setBgOpa(0);
         _close_hint->setBorderWidth(0);
         _close_hint->setPaddingAll(0);
         _close_hint->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_ext_click_area(_close_hint->get(), 8);
         _close_hint->onClick().connect([this]() { hide(); });
 
         _close_label = std::make_unique<Label>(_close_hint->get());
         _close_label->setText(LV_SYMBOL_UP "  Swipe up to close");
-        _close_label->setTextFont(&lv_font_montserrat_14);
+        _close_label->setTextFont(&MontserratSemiBold16);
         _close_label->setTextColor(lv_color_hex(theme.textSecondary));
         _close_label->align(LV_ALIGN_CENTER, 0, 0);
 
@@ -287,6 +412,7 @@ public:
         _pos_y_anim.springOptions().bounce         = 0.08;
         _pos_y_anim.springOptions().visualDuration = 0.25;
         _pos_y_anim.teleport(_pos_y_hide);
+        _card->setPos(0, _pos_y_hide);
     }
 
     void update()
@@ -294,16 +420,23 @@ public:
         _pos_y_anim.update();
         if (!_pos_y_anim.done()) {
             _card->setPos(0, _pos_y_anim.directValue());
-        } else if (_hide_panel_flag) {
-            _hide_panel_flag = false;
-            _backdrop->setHidden(true);
+        } else {
+            _card->setPos(0, _is_hidden ? _pos_y_hide : _pos_y_show);
+            if (_hide_panel_flag) {
+                _hide_panel_flag = false;
+                _backdrop->setHidden(true);
+            }
         }
     }
 
     void show()
     {
+        if (GetHAL().getThemeMode() != _last_theme) {
+            applyTheme();
+        }
         _brightness_row->setValue(GetHAL().getBackLightBrightness());
         _volume_row->setValue(GetHAL().getSpeakerVolume());
+        _theme_row->setTheme(GetHAL().getThemeMode());
         _backdrop->moveForeground();
         _backdrop->setHidden(false);
         _hide_panel_flag = false;
@@ -330,8 +463,33 @@ public:
     }
 
 private:
-    const int _pos_y_show = 12;
-    const int _pos_y_hide = -360;
+    void applyTheme()
+    {
+        const auto mode   = GetHAL().getThemeMode();
+        const auto& theme = GetHAL().getTheme();
+        const bool light  = (mode == Hal::ThemeMode::Light);
+        _last_theme       = mode;
+
+        _backdrop->setBgColor(lv_color_hex(light ? 0x5E584A : 0x000000));
+        _card->setBgColor(lv_color_hex(theme.cardBackground));
+        _card->setBorderColor(lv_color_hex(theme.border));
+        _handle->setBgColor(lv_color_hex(theme.textMuted));
+        _title->setTextColor(lv_color_hex(theme.textPrimary));
+        _close_label->setTextColor(lv_color_hex(theme.textSecondary));
+
+        if (_brightness_row) {
+            _brightness_row->applyTheme();
+        }
+        if (_volume_row) {
+            _volume_row->applyTheme();
+        }
+        if (_theme_row) {
+            _theme_row->applyTheme();
+        }
+    }
+
+    const int _pos_y_show = 4;
+    const int _pos_y_hide = -380;
 
     std::unique_ptr<Container> _backdrop;
     std::unique_ptr<Container> _card;
@@ -339,9 +497,11 @@ private:
     std::unique_ptr<Label> _title;
     std::unique_ptr<QuickSettingRow> _brightness_row;
     std::unique_ptr<QuickSettingRow> _volume_row;
+    std::unique_ptr<QuickThemeRow> _theme_row;
     std::unique_ptr<Container> _close_hint;
     std::unique_ptr<Label> _close_label;
 
+    Hal::ThemeMode _last_theme = Hal::ThemeMode::Dark;
     AnimateValue _pos_y_anim;
     bool _is_hidden       = true;
     bool _hide_panel_flag = false;

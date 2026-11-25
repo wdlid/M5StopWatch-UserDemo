@@ -209,10 +209,14 @@ static std::unique_ptr<M5StopWatch> _display;
 static std::unique_ptr<LGFX_Sprite> _canvas;
 static std::unique_ptr<Cst820> _cst820;
 
-static bool _screen_sleeping        = false;
-static uint32_t _screen_timeout_sec = 30;
-static uint32_t _last_activity_time = 0;
-static uint32_t _last_wake_time     = 0;
+static bool _screen_sleeping           = false;
+static uint32_t _screen_timeout_sec    = 30;
+static uint32_t _last_activity_time    = 0;
+static uint32_t _last_wake_time        = 0;
+static uint32_t _screen_sleep_start_ms = 0;
+
+// Soft-standby window after screen sleep before entering deep sleep.
+static constexpr uint32_t _deep_sleep_after_ms = 30000;
 
 static std::atomic<Hal::ColorTemp> _color_temp = Hal::ColorTemp::Cool;
 static uint16_t _lut_r[32];
@@ -298,19 +302,47 @@ static const Hal::GlobalTheme _theme_dark = {
 };
 
 static const Hal::GlobalTheme _theme_light = {
-    .background         = 0xF5EFE6,  // Warm parchment cream (Anthropic style)
-    .cardBackground     = 0xFAF6EE,  // Soft warm off-white card
-    .cardPressed        = 0xEAE2D3,  // Warm sand pressed feedback
-    .textPrimary        = 0x1F1E1B,  // Deep warm charcoal ink
-    .textSecondary      = 0x6E675C,  // Warm taupe secondary text
-    .textMuted          = 0x9E9587,  // Muted warm gray
-    .border             = 0xE2D9C8,  // Subtle warm border
+    .background         = 0xF7E9B8,  // Warm yellow paper (Claude-style paper)
+    .cardBackground     = 0xFCF4D4,  // Soft warm ivory-yellow card
+    .cardPressed        = 0xEDE0AC,  // Warm pressed yellow-tan feedback
+    .textPrimary        = 0x1F1C14,  // Deep warm charcoal ink
+    .textSecondary      = 0x6B624C,  // Warm olive-taupe secondary text
+    .textMuted          = 0x9B9076,  // Muted warm sepia-gray
+    .border             = 0xE4D39B,  // Subtle golden-tan border
     .accent             = 0xD97757,  // Anthropic terracotta accent
-    .statusBarPrimary   = 0x2D2A24,  // Warm charcoal status bar text/icons
-    .statusBarSecondary = 0xF5EFE6,  // Matches warm parchment background
+    .statusBarPrimary   = 0x2B261B,  // Warm dark ink status bar text/icons
+    .statusBarSecondary = 0xF7E9B8,  // Matches warm yellow paper background
 };
 
 static std::atomic<Hal::ThemeMode> _theme_mode{Hal::ThemeMode::Light};
+static std::atomic<int> _clock_face_index{0};
+
+void Hal::setClockFaceIndex(int index, bool saveToSettings)
+{
+    if (index < 0) {
+        index = 0;
+    }
+    _clock_face_index.store(index, std::memory_order_release);
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("clock_face", index);
+        mclog::tagInfo(_tag, "clock face saved to settings: {}", index);
+    }
+}
+
+int Hal::getClockFaceIndex(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        int val = settings.GetInt("clock_face", 0);
+        if (val < 0) {
+            val = 0;
+        }
+        _clock_face_index.store(val, std::memory_order_release);
+        mclog::tagInfo(_tag, "clock face loaded from settings: {}", val);
+    }
+    return _clock_face_index.load(std::memory_order_acquire);
+}
 
 void Hal::setThemeMode(Hal::ThemeMode mode, bool saveToSettings)
 {
@@ -381,6 +413,9 @@ void Hal::display_init()
 
     // Load theme from settings
     getThemeMode(true);
+
+    // Load preferred clock face from settings
+    getClockFaceIndex(true);
 
     getScreenTimeout(true);
     _last_activity_time = millis();
@@ -472,7 +507,8 @@ void Hal::sleepScreen()
     if (_screen_sleeping) {
         return;
     }
-    _screen_sleeping = true;
+    _screen_sleeping       = true;
+    _screen_sleep_start_ms = millis();
     stopLvglUpdate();
     {
         // Wait out any concurrent lv_timer_handler/flush before sleeping the
@@ -488,11 +524,11 @@ void Hal::sleepScreen()
         _cst820->sleep();
     }
     if (!isAudioPlaying()) {
-        ioe_speaker_enable(false);
+        audio_enter_standby();
     }
     setPowerLed(false);
     button_on_sleep();
-    mclog::tagInfo(_tag, "screen sleep");
+    mclog::tagInfo(_tag, "screen sleep (deep sleep in {}s if idle)", _deep_sleep_after_ms / 1000);
 }
 
 void Hal::wakeScreen()
@@ -500,16 +536,17 @@ void Hal::wakeScreen()
     if (!_screen_sleeping) {
         return;
     }
-    _screen_sleeping    = false;
-    _last_activity_time = millis();
-    _last_wake_time     = _last_activity_time;
+    _screen_sleeping       = false;
+    _screen_sleep_start_ms = 0;
+    _last_activity_time    = millis();
+    _last_wake_time        = _last_activity_time;
     ioe_tp_reset();
     if (_display) {
         _display->setSleep(false);
         int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
         _display->setBrightness(set_target);
     }
-    ioe_speaker_enable(true);
+    audio_exit_standby();
     setPowerLed(false);
     startLvglUpdate();
     mclog::tagInfo(_tag, "screen wake");
@@ -524,7 +561,24 @@ void Hal::resetActivityTimer()
 
 void Hal::display_tick()
 {
-    if (_screen_timeout_sec == 0 || _screen_sleeping) {
+    if (_screen_sleeping) {
+        if (isOtaRunning() || isAudioPlaying()) {
+            return;
+        }
+        const auto wifi = getWifiStatus();
+        if (wifi.badgeMode || wifi.configMode) {
+            return;
+        }
+        if (_screen_sleep_start_ms != 0 &&
+            millis() - _screen_sleep_start_ms >= _deep_sleep_after_ms) {
+            enterDeepSleepStandby();
+            // Returned => deferred (e.g. alarm soon). Retry after another soft-standby window.
+            _screen_sleep_start_ms = millis();
+        }
+        return;
+    }
+
+    if (_screen_timeout_sec == 0) {
         return;
     }
     if (millis() - _last_activity_time >= _screen_timeout_sec * 1000) {

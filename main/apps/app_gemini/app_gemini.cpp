@@ -71,7 +71,8 @@ void AppGemini::toggleWebConfig()
         if (_web_server->start()) {
             LvglLockGuard lock;
             if (_view) {
-                _view->setStatusText("Web Setup Mode");
+                _view->setState(gemini::SessionState::Ready, false, true);
+                _view->setStatusText("");
                 _view->setTranscriptText(
                     "", "Wi-Fi: " + _web_server->ssid() + "\nOpen: " + _web_server->pageUrl());
             }
@@ -138,23 +139,14 @@ void AppGemini::onRunning()
         _client->start(cfg);
     }
 
-    // Audio spectrum & volume updates (skip mic read while PTT talking or AI speaking)
-    if (!_is_talking_active && (!_client || _client->getState() != gemini::SessionState::Speaking)) {
-        GetHAL().updateAudioSpectrum();
-    }
-    const auto spectrum = GetHAL().getAudioSpectrum();
-
     LvglLockGuard lock;
     if (_view) {
-        _view->setSpectrum(spectrum.bands);
-        _view->setPeakFrequencyHz(spectrum.peakFrequencyHz);
-
         const bool web_active = _web_server && _web_server->isRunning();
         if (web_active) {
             _view->setState(gemini::SessionState::Ready, false, true);
-            _view->setStatusText("Web Setup Mode");
+            _view->setStatusText("");
             _view->setTranscriptText("", "Wi-Fi: " + _web_server->ssid() + "\n" + _web_server->pageUrl());
-            _view->setAudioLevel(0.15f);
+            _view->setAudioLevel(0.0f);
         } else if (_client) {
             auto st          = _client->getState();
             bool talking     = _client->isPttTalking();
@@ -164,10 +156,8 @@ void AppGemini::onRunning()
 
             _view->setState(st, talking, false);
             _view->setStatusText(stat);
-            if (!u_tx.empty() || !m_tx.empty()) {
-                _view->setTranscriptText(u_tx, m_tx);
-            }
-            _view->setAudioLevel(GetHAL().audioGetCurrentRms());
+            _view->setTranscriptText(u_tx, m_tx);
+            _view->setAudioLevel(st == gemini::SessionState::Speaking ? GetHAL().audioGetCurrentRms() : 0.0f);
         }
         _view->update();
     }

@@ -20,12 +20,19 @@ enum class AqiLevel : uint8_t {
 };
 
 struct Snapshot {
-    bool valid             = false;
-    std::string temperature;  // e.g. "22C"
-    std::string condition;    // e.g. "Clear"
-    std::string aqiText;      // e.g. "AQ9"
-    int aqiValue           = -1;
-    AqiLevel aqiLevel      = AqiLevel::Unknown;
+    bool valid = false;
+    bool hasTemp = false;
+    int tempC = 0;
+    std::string temperature;   // ASCII e.g. "22C" (used by ArcTopClock)
+    std::string tempDisplay;   // Display e.g. "22°C"
+    std::string condition;     // e.g. "Clear", "Cloudy", "Rain", "Snow"
+    std::string windDir;       // e.g. "SW", "NE", "Calm"
+    std::string windLevel;     // e.g. "Lv.2", "Lv.3-4"
+    std::string windText;      // e.g. "SW Lv.2"
+    std::string humidity;      // e.g. "45%"
+    std::string aqiText;       // e.g. "AQ30" (used by ArcTopClock)
+    int aqiValue      = -1;
+    AqiLevel aqiLevel = AqiLevel::Unknown;
 };
 
 /**
